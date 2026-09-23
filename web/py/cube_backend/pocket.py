@@ -63,7 +63,10 @@ ANCHOR_CANDIDATE = _anchor_candidate()
 
 
 def _incremental_score(bank: TileBank, candidate, occupancy) -> float:
-    score = 0.0
+    score = sum(
+        bank.placement_score(placement.source_facelet, placement.rot, placement.target_facelet)
+        for placement in candidate.placements
+    )
     for placement in candidate.placements:
         for neighbour, side, opposite in NEIGHBOURS[placement.target_facelet]:
             other = occupancy.get(neighbour)
@@ -119,9 +122,12 @@ def parse_corners(state: str) -> tuple[tuple[int, ...], tuple[int, ...]]:
 def reconstruct_2x2(raw: bytes, tile_size: int) -> dict:
     bank = TileBank(raw, tile_size, 24)
     anchor_occupancy = _install(ANCHOR_CANDIDATE, {})
-    # Grow out from DBL so every new home corner quickly gains scored neighbours.
     home_order = (5, 7, 2, 4, 1, 3, 0)
-    beam = [(0.0, 1 << ANCHOR, (ANCHOR_CANDIDATE,), anchor_occupancy)]
+    anchor_score = sum(
+        bank.placement_score(p.source_facelet, p.rot, p.target_facelet)
+        for p in ANCHOR_CANDIDATE.placements
+    )
+    beam = [(anchor_score, 1 << ANCHOR, (ANCHOR_CANDIDATE,), anchor_occupancy)]
     beam_width = 6000
 
     for home in home_order:
