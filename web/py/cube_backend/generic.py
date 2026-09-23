@@ -8,6 +8,7 @@ from .geometry import FACE_INDEX, FACE_NAMES, FACE_NORMAL, FACE_RIGHT, FACE_UP
 
 Vector = tuple[int, int, int]
 Matrix = tuple[Vector, Vector, Vector]
+IDENTITY: Matrix = ((1, 0, 0), (0, 1, 0), (0, 0, 1))
 
 
 def _dot(a: Vector, b: Vector) -> int:
@@ -32,6 +33,17 @@ def _mul(a: Vector, k: int) -> Vector:
 
 def mat_vec(m: Matrix, v: Vector) -> Vector:
     return _dot(m[0], v), _dot(m[1], v), _dot(m[2], v)
+
+
+def mat_mul(a: Matrix, b: Matrix) -> Matrix:
+    return tuple(
+        tuple(sum(a[i][k] * b[k][j] for k in range(3)) for j in range(3))
+        for i in range(3)
+    )  # type: ignore[return-value]
+
+
+def transpose(m: Matrix) -> Matrix:
+    return tuple(tuple(m[j][i] for j in range(3)) for i in range(3))  # type: ignore[return-value]
 
 
 def _det(m: Matrix) -> int:
@@ -130,6 +142,7 @@ class GenericCandidate:
     current_position: Vector
     home_position: Vector
     placements: tuple[GenericPlacement, ...]
+    matrix: Matrix
 
 
 @lru_cache(maxsize=None)
@@ -158,26 +171,8 @@ def candidates_for_piece(current_position: Vector, home_position: Vector, size: 
         if key in seen:
             continue
         seen.add(key)
-        out.append(GenericCandidate(current_position, home_position, tuple(placements)))
+        out.append(GenericCandidate(current_position, home_position, tuple(placements), matrix))
     return tuple(out)
-
-
-@lru_cache(maxsize=None)
-def face_neighbours(size: int) -> dict[int, tuple[tuple[int, str, str], ...]]:
-    out: dict[int, list[tuple[int, str, str]]] = {i: [] for i in range(6 * size * size)}
-    for face in range(6):
-        for row in range(size):
-            for col in range(size):
-                idx = facelet_index(face, row, col, size)
-                if row > 0:
-                    out[idx].append((facelet_index(face, row - 1, col, size), "N", "S"))
-                if col + 1 < size:
-                    out[idx].append((facelet_index(face, row, col + 1, size), "E", "W"))
-                if row + 1 < size:
-                    out[idx].append((facelet_index(face, row + 1, col, size), "S", "N"))
-                if col > 0:
-                    out[idx].append((facelet_index(face, row, col - 1, size), "W", "E"))
-    return {key: tuple(value) for key, value in out.items()}
 
 
 def rotate_vector(vector: Vector, axis: Vector, quarters: int) -> Vector:
@@ -185,6 +180,17 @@ def rotate_vector(vector: Vector, axis: Vector, quarters: int) -> Vector:
     for _ in range(quarters % 4):
         out = _add(_cross(axis, out), _mul(axis, _dot(axis, out)))
     return out
+
+
+def _rotation_matrix(axis: Vector, quarters: int) -> Matrix:
+    ex = rotate_vector((1, 0, 0), axis, quarters)
+    ey = rotate_vector((0, 1, 0), axis, quarters)
+    ez = rotate_vector((0, 0, 1), axis, quarters)
+    return (
+        (ex[0], ey[0], ez[0]),
+        (ex[1], ey[1], ez[1]),
+        (ex[2], ey[2], ez[2]),
+    )
 
 
 def parse_move(token: str) -> tuple[int, int, int]:
@@ -203,6 +209,84 @@ def parse_move(token: str) -> tuple[int, int, int]:
     layers = int(digits) if digits else (2 if wide else 1)
     amount = 2 if suffix == "2" else (-1 if suffix == "'" else 1)
     return FACE_INDEX[core], layers, amount
+
+
+def move_position(position: Vector, size: int, token: str) -> Vector:
+    face, layers, amount = parse_move(token)
+    if layers < 1 or layers > size:
+        raise ValueError(f"Invalid layer count in move {token}")
+    axis = FACE_NORMAL[face]
+    limit = size - 1
+    cutoff = limit - 2 * (layers - 1)
+    if _dot(position, axis) < cutoff:
+        return position
+    return rotate_vector(position, axis, (-amount) % 4)
+
+
+def _move_pose(position: Vector, orientation: Matrix, size: int, token: str) -> tuple[Vector, Matrix]:
+    face, layers, amount = parse_move(token)
+    axis = FACE_NORMAL[face]
+    limit = size - 1
+    cutoff = limit - 2 * (layers - 1)
+    if _dot(position, axis) < cutoff:
+        return position, orientation
+    quarters = (-amount) % 4
+    return (
+        rotate_vector(position, axis, quarters),
+        mat_mul(_rotation_matrix(axis, quarters), orientation),
+    )
+
+
+@lru_cache(maxsize=None)
+def reachable_orientations(home_position: Vector, size: int) -> dict[Vector, tuple[Matrix, ...]]:
+    """Legal cubie orientations at every position for one home cubie.
+
+    On a 4x4, a centre or wing has one legal orientation at each position;
+    a corner has three. Filtering geometric candidates with this table rejects
+    mirror/flipped picture matches that cannot occur on the physical puzzle.
+    """
+    generators = tuple(f + wide for f in FACE_NAMES for wide in ("", "w")) if size >= 4 else tuple(FACE_NAMES)
+    start = (home_position, IDENTITY)
+    todo = [start]
+    seen = {start}
+    by_position: dict[Vector, set[Matrix]] = {}
+    while todo:
+        position, orientation = todo.pop()
+        by_position.setdefault(position, set()).add(orientation)
+        for token in generators:
+            nxt = _move_pose(position, orientation, size, token)
+            if nxt not in seen:
+                seen.add(nxt)
+                todo.append(nxt)
+    return {position: tuple(sorted(matrices)) for position, matrices in by_position.items()}
+
+
+@lru_cache(maxsize=None)
+def legal_candidates_for_piece(current_position: Vector, home_position: Vector, size: int) -> tuple[GenericCandidate, ...]:
+    allowed = set(reachable_orientations(home_position, size).get(current_position, ()))
+    return tuple(
+        candidate
+        for candidate in candidates_for_piece(current_position, home_position, size)
+        if transpose(candidate.matrix) in allowed
+    )
+
+
+@lru_cache(maxsize=None)
+def face_neighbours(size: int) -> dict[int, tuple[tuple[int, str, str], ...]]:
+    out: dict[int, list[tuple[int, str, str]]] = {i: [] for i in range(6 * size * size)}
+    for face in range(6):
+        for row in range(size):
+            for col in range(size):
+                idx = facelet_index(face, row, col, size)
+                if row > 0:
+                    out[idx].append((facelet_index(face, row - 1, col, size), "N", "S"))
+                if col + 1 < size:
+                    out[idx].append((facelet_index(face, row, col + 1, size), "E", "W"))
+                if row + 1 < size:
+                    out[idx].append((facelet_index(face, row + 1, col, size), "S", "N"))
+                if col > 0:
+                    out[idx].append((facelet_index(face, row, col - 1, size), "W", "E"))
+    return {key: tuple(value) for key, value in out.items()}
 
 
 def apply_facelet_move(state: str, size: int, token: str) -> str:
