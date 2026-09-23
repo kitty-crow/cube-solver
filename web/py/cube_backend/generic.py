@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import itertools
 from dataclasses import dataclass
+from functools import lru_cache
 
-from .geometry import FACE_INDEX, FACE_NAMES, FACE_NORMAL, FACE_RIGHT, FACE_UP, OPPOSITE_SIDE
+from .geometry import FACE_INDEX, FACE_NAMES, FACE_NORMAL, FACE_RIGHT, FACE_UP
 
 Vector = tuple[int, int, int]
 Matrix = tuple[Vector, Vector, Vector]
@@ -54,7 +55,6 @@ def cube_rotations() -> tuple[Matrix, ...]:
 
 ROTATIONS = cube_rotations()
 NORMAL_TO_FACE = {normal: i for i, normal in enumerate(FACE_NORMAL)}
-SIDES = ("N", "E", "S", "W")
 
 
 def facelet_position(face: int, row: int, col: int, size: int) -> Vector:
@@ -90,6 +90,7 @@ def boundary_count(position: Vector, size: int) -> int:
     return sum(abs(v) == limit for v in position)
 
 
+@lru_cache(maxsize=None)
 def pieces(size: int) -> dict[Vector, tuple[int, ...]]:
     out: dict[Vector, list[int]] = {}
     for face in range(6):
@@ -105,15 +106,13 @@ def tile_rotation(source_face: int, target_face: int, matrix: Matrix) -> int:
     mapped_up = mat_vec(matrix, FACE_UP[source_face])
     up = FACE_UP[target_face]
     right = FACE_RIGHT[target_face]
-    neg_up = tuple(-x for x in up)
-    neg_right = tuple(-x for x in right)
     if mapped_up == up:
         return 0
     if mapped_up == right:
         return 1
-    if mapped_up == neg_up:
+    if mapped_up == tuple(-x for x in up):
         return 2
-    if mapped_up == neg_right:
+    if mapped_up == tuple(-x for x in right):
         return 3
     raise ValueError("Mapped sticker orientation is not in target face basis")
 
@@ -133,6 +132,7 @@ class GenericCandidate:
     placements: tuple[GenericPlacement, ...]
 
 
+@lru_cache(maxsize=None)
 def candidates_for_piece(current_position: Vector, home_position: Vector, size: int) -> tuple[GenericCandidate, ...]:
     current_piece = pieces(size)[current_position]
     seen = set()
@@ -162,6 +162,7 @@ def candidates_for_piece(current_position: Vector, home_position: Vector, size: 
     return tuple(out)
 
 
+@lru_cache(maxsize=None)
 def face_neighbours(size: int) -> dict[int, tuple[tuple[int, str, str], ...]]:
     out: dict[int, list[tuple[int, str, str]]] = {i: [] for i in range(6 * size * size)}
     for face in range(6):
@@ -186,18 +187,38 @@ def rotate_vector(vector: Vector, axis: Vector, quarters: int) -> Vector:
     return out
 
 
+def parse_move(token: str) -> tuple[int, int, int]:
+    raw = token.strip()
+    suffix = "2" if raw.endswith("2") else "'" if raw.endswith("'") else ""
+    core = raw[:-len(suffix)] if suffix else raw
+    wide = core.endswith("w") or core.endswith("W")
+    if wide:
+        core = core[:-1]
+    digits = ""
+    while core and core[0].isdigit():
+        digits += core[0]
+        core = core[1:]
+    if len(core) != 1 or core not in FACE_INDEX:
+        raise ValueError(f"Unsupported move: {token}")
+    layers = int(digits) if digits else (2 if wide else 1)
+    amount = 2 if suffix == "2" else (-1 if suffix == "'" else 1)
+    return FACE_INDEX[core], layers, amount
+
+
 def apply_facelet_move(state: str, size: int, token: str) -> str:
-    face = FACE_INDEX[token[0]]
-    amount = 2 if token.endswith("2") else (-1 if token.endswith("'") else 1)
+    face, layers, amount = parse_move(token)
+    if layers < 1 or layers > size:
+        raise ValueError(f"Invalid layer count in move {token}")
     quarters = (-amount) % 4
     axis = FACE_NORMAL[face]
     limit = size - 1
+    cutoff = limit - 2 * (layers - 1)
     out = ["?"] * len(state)
     for idx, value in enumerate(state):
         source_face, row, col = facelet_parts(idx, size)
         position = facelet_position(source_face, row, col, size)
         normal = FACE_NORMAL[source_face]
-        if _dot(position, axis) == limit:
+        if _dot(position, axis) >= cutoff:
             position = rotate_vector(position, axis, quarters)
             normal = rotate_vector(normal, axis, quarters)
         target_face = NORMAL_TO_FACE[normal]
