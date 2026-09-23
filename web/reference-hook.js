@@ -74,12 +74,14 @@ window.pictureReference = assistant;
 
 let analysedKey = "";
 let analysing = false;
+let allowSolve = false;
 let scanRefreshTimer = null;
 
 async function refreshAvailability() {
   const payload = await savedPayload().catch(() => null);
   if (!payload) {
     analysedKey = "";
+    allowSolve = false;
     assistant.invalidate();
     assistant.panel.hidden = true;
     return;
@@ -87,53 +89,59 @@ async function refreshAvailability() {
   assistant.panel.hidden = false;
   assistant.lastPayload = payload;
   const key = payloadKey(payload);
-  if (key !== analysedKey && !assistant.pending) {
-    assistant.statusEl.textContent = "Ready to identify six faces";
-  }
+  if (key !== analysedKey && !assistant.pending) assistant.statusEl.textContent = "Ready to identify six faces";
 }
 
 new MutationObserver(() => {
+  analysedKey = "";
+  allowSolve = false;
+  assistant.invalidate();
   clearTimeout(scanRefreshTimer);
   scanRefreshTimer = setTimeout(refreshAvailability, 180);
 }).observe(reviewGrid, { childList: true, subtree: true });
 setTimeout(refreshAvailability, 250);
 
-solveButton.addEventListener("click", async (event) => {
-  if (analysing) {
-    event.preventDefault();
-    event.stopImmediatePropagation();
-    return;
-  }
-  const payload = await savedPayload().catch(() => null);
-  if (!payload) return;
-  const key = payloadKey(payload);
+assistant.subjectEl.addEventListener("input", () => { allowSolve = false; });
+assistant.searchButton.addEventListener("click", () => { allowSolve = false; });
+assistant.candidatesEl.addEventListener("click", () => {
+  queueMicrotask(() => { if (assistant.selectedEvidence()) allowSolve = true; });
+});
+
+solveButton.addEventListener("click", (event) => {
   const currentSubject = assistant.subjectEl.value.trim();
-  const ready = analysedKey === key && assistant.result && (!currentSubject || currentSubject === assistant.lastSubject);
-  if (ready) {
-    await assistant.persistSelected().catch(() => {});
+  const subjectMatches = !currentSubject || currentSubject === assistant.lastSubject;
+  if (allowSolve && assistant.result && subjectMatches) {
+    allowSolve = false;
+    assistant.persistSelected().catch(() => {});
     return;
   }
 
   event.preventDefault();
   event.stopImmediatePropagation();
+  if (analysing) return;
+
   analysing = true;
-  const oldText = solveButton.textContent;
   solveButton.disabled = true;
   solveButton.textContent = "Identifying artwork…";
   assistant.panel.hidden = false;
-  assistant.lastPayload = payload;
-  try {
-    await assistant.analyse(payload, currentSubject);
+
+  (async () => {
+    const payload = await savedPayload().catch(() => null);
+    if (!payload) throw new Error("Saved scan is not ready yet");
+    const key = payloadKey(payload);
+    assistant.lastPayload = payload;
+    const result = await assistant.analyse(payload, currentSubject);
     analysedKey = key;
+    allowSolve = true;
     solveButton.textContent = assistant.selectedEvidence() ? "Solve with reference" : "Solve without reference";
     assistant.panel.scrollIntoView({ behavior: "smooth", block: "nearest" });
-  } catch (error) {
+    return result;
+  })().catch((error) => {
     console.warn("Semantic reference analysis failed", error);
-    analysedKey = key;
+    allowSolve = true;
     solveButton.textContent = "Solve without reference";
-  } finally {
+  }).finally(() => {
     solveButton.disabled = false;
-    if (!assistant.result && oldText) solveButton.textContent = "Solve without reference";
     analysing = false;
-  }
+  });
 }, true);
