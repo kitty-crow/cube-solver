@@ -4,6 +4,10 @@ export async function detectMlCapabilities() {
   const crossOriginIsolated = globalThis.crossOriginIsolated === true;
   const wasmThreads = crossOriginIsolated && typeof SharedArrayBuffer !== "undefined";
   const wasmSIMD = typeof WebAssembly !== "undefined";
+  const userAgent = String(globalThis.navigator?.userAgent || "");
+  const mobile = Boolean(globalThis.navigator?.userAgentData?.mobile) || /Android|iPhone|iPad|iPod|Mobile/i.test(userAgent);
+  const heapLimitBytes = Number(globalThis.performance?.memory?.jsHeapSizeLimit || 0);
+  const heapLimitMB = heapLimitBytes > 0 ? Math.floor(heapLimitBytes / 1048576) : 0;
 
   let webgpu = false;
   let adapterInfo = null;
@@ -29,7 +33,19 @@ export async function detectMlCapabilities() {
     webgl2 = Boolean(canvas?.getContext?.("webgl2", { powerPreference: "high-performance" }));
   } catch (_) {}
 
-  const cpuWorkers = Math.max(1, Math.min(8, hardwareConcurrency > 2 ? hardwareConcurrency - 1 : 1));
+  let memoryTier = "low";
+  if ((deviceMemory >= 8 || heapLimitMB >= 3072) && !mobile) memoryTier = "high";
+  else if (deviceMemory >= 4 || heapLimitMB >= 1536 || (!mobile && hardwareConcurrency >= 8)) memoryTier = "medium";
+
+  // Browsers do not expose exact free RAM. Use a deliberately conservative
+  // working-set budget and never assume unknown mobile memory is plentiful.
+  let memoryBudgetMB;
+  if (deviceMemory > 0) memoryBudgetMB = Math.floor(Math.min(1536, Math.max(256, deviceMemory * 1024 * 0.20)));
+  else if (heapLimitMB > 0) memoryBudgetMB = Math.floor(Math.min(1536, Math.max(256, heapLimitMB * 0.35)));
+  else memoryBudgetMB = mobile ? 320 : memoryTier === "high" ? 1024 : 640;
+
+  const maxWorkersByMemory = memoryTier === "low" ? 2 : memoryTier === "medium" ? 4 : 8;
+  const cpuWorkers = Math.max(1, Math.min(maxWorkersByMemory, hardwareConcurrency > 2 ? hardwareConcurrency - 1 : 1));
   const neuralBackend = webgpu ? "webgpu" : webgl2 ? "webgl" : "wasm";
   const imageBackend = webgpu ? "webgpu" : webgl2 ? "webgl2" : cpuWorkers > 1 ? "workers" : "wasm";
 
@@ -41,6 +57,10 @@ export async function detectMlCapabilities() {
     crossOriginIsolated,
     hardwareConcurrency,
     deviceMemory,
+    heapLimitMB,
+    mobile,
+    memoryTier,
+    memoryBudgetMB,
     cpuWorkers,
     adapterInfo,
     neuralBackend,
@@ -56,5 +76,6 @@ export function capabilityLabel(capabilities) {
   else parts.push("WASM");
   if (capabilities.cpuWorkers > 1) parts.push(`${capabilities.cpuWorkers} CPU workers`);
   if (capabilities.wasmSIMD) parts.push("SIMD");
+  if (capabilities.memoryTier) parts.push(`${capabilities.memoryTier} memory`);
   return parts.join(" · ");
 }
