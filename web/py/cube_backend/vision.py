@@ -43,10 +43,19 @@ class TileBank:
         active = _ACTIVE_EVIDENCE if evidence is None else evidence
         self._external = self._decode_seam_evidence(active)
         self._absolute, self._reference_fit = self._decode_absolute_evidence(active)
+        self._absolute_stats = self._build_absolute_stats()
         for tile in range(tile_count):
             for rot in range(4):
                 for side in SIDES:
                     self._profiles[(tile, rot, side)] = self._make_profile(tile, rot, side)
+
+    @property
+    def has_reference(self) -> bool:
+        return self._absolute is not None
+
+    @property
+    def reference_fit(self) -> float:
+        return self._reference_fit
 
     def _decode_seam_evidence(self, evidence):
         if not isinstance(evidence, dict):
@@ -80,6 +89,29 @@ class TileBank:
             return None, 0.0
         fit = float(reference.get("fit", 0.0) or 0.0)
         return values, max(0.0, min(1.0, fit))
+
+    def _build_absolute_stats(self):
+        if self._absolute is None:
+            return None
+        stats = []
+        n = self.tile_count
+        for state in range(self._states):
+            start = state * n
+            row = [max(0.0, min(1.0, float(self._absolute[start + target]))) for target in range(n)]
+            mean = sum(row) / n
+            variance = sum((value - mean) ** 2 for value in row) / n
+            std = math.sqrt(max(variance, 1e-12))
+            ordered = sorted(row)
+            median = ordered[n // 2]
+            best = ordered[-1]
+            # Generic references often make every ocean/sky tile score around
+            # 0.95. Such a row is not useful absolute-position evidence even
+            # though its raw cosine score looks excellent. Only reward a state
+            # when the reference actually distinguishes some destinations.
+            spread = max(0.0, best - median)
+            reliability = max(0.0, min(1.0, (spread - 0.012) / 0.11))
+            stats.append((mean, std, reliability, tuple(row)))
+        return tuple(stats)
 
     def _rgb_rot(self, tile: int, x: int, y: int, rot: int) -> tuple[int, int, int]:
         n = self.size
@@ -150,23 +182,40 @@ class TileBank:
             return None
         return max(0.0, min(1.0, value))
 
-    def placement_score(self, tile: int, rot: int, target_facelet: int) -> float:
-        """Absolute reference evidence for one proposed sticker destination.
+    def placement_percentile(self, tile: int, rot: int, target_facelet: int) -> float | None:
+        value = self.absolute_compatibility(tile, rot, target_facelet)
+        if value is None or self._absolute_stats is None:
+            return None
+        state = tile * 4 + (rot % 4)
+        row = self._absolute_stats[state][3]
+        below = sum(1 for item in row if item < value)
+        equal = sum(1 for item in row if abs(item - value) <= 1e-7)
+        return max(0.0, min(1.0, (below + 0.5 * equal) / len(row)))
 
-        This is intentionally additive rather than mandatory. A wrong or weak
-        internet reference cannot create an illegal cube state, while a strong
-        reference can resolve ocean/sky/texture ambiguity that seam matching
-        alone cannot distinguish.
+    def placement_score(self, tile: int, rot: int, target_facelet: int) -> float:
+        """Discriminative absolute-position evidence for one sticker.
+
+        Raw reference similarity is deliberately not enough. A uniform ocean
+        sticker can have a 0.98 cosine match to dozens of ocean positions. The
+        score therefore asks whether this destination is unusually good for
+        this exact sticker state, and suppresses flat/ambiguous rows.
         """
         value = self.absolute_compatibility(tile, rot, target_facelet)
-        if value is None:
+        if value is None or self._absolute_stats is None:
             return 0.0
-        # Ignore very weak reference fits. Above that threshold, let absolute
-        # evidence become comparable to several seam terms but not dominate a
-        # clearly contradictory physical picture reconstruction.
-        confidence = max(0.0, (self._reference_fit - 0.42) / 0.38)
-        confidence = min(1.0, confidence)
-        return 0.24 * confidence * (2.0 * value - 1.0)
+        state = tile * 4 + (rot % 4)
+        mean, std, reliability, _ = self._absolute_stats[state]
+        if reliability <= 0.0:
+            return 0.0
+        percentile = self.placement_percentile(tile, rot, target_facelet)
+        if percentile is None:
+            return 0.0
+        z = (value - mean) / max(0.022, std)
+        z_signal = math.tanh(z / 1.6)
+        rank_signal = 2.0 * percentile - 1.0
+        reference_confidence = max(0.0, min(1.0, (self._reference_fit - 0.35) / 0.40))
+        signal = 0.62 * z_signal + 0.38 * rank_signal
+        return 0.72 * reference_confidence * reliability * signal
 
     @lru_cache(maxsize=262144)
     def compatibility(self, a: int, ar: int, aside: str, b: int, br: int, bside: str) -> float:
