@@ -34,6 +34,8 @@ jobs:
           python-version: "3.14"
       - name: Install project
         run: bun install
+      - name: Install vendored Pages template
+        run: bun install --cwd vendor/pages
       - name: Check application
         run: bun run check
       - name: Build Pages site
@@ -41,7 +43,6 @@ jobs:
       - name: Install mobile audit browser
         run: |
           cd vendor/pages
-          bun install
           bunx playwright install --with-deps chromium
       - name: Audit mobile responsiveness
         run: bun run audit:mobile
