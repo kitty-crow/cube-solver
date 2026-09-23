@@ -3,7 +3,8 @@ from __future__ import annotations
 import base64
 import json
 
-from .centres import centre_correction, centres_after_solution
+from .centres import CUBE_ROTATIONS, centre_correction, centres_after_solution
+from .geometry import FACE_INDEX, FACE_NAMES, FACE_NORMAL, FACE_RIGHT, FACE_UP, EDGE_GEOM, CORNER_GEOM
 from .reconstruct import reconstruct
 
 _SOLVER_READY = False
