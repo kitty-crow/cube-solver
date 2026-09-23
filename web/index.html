@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, minimum-scale=1, maximum-scale=1, user-scalable=no">
-  <meta name="description" content="Live camera picture-cube solver for Earth and other 3×3 artwork cubes.">
+  <meta name="description" content="Browser picture-cube solver.">
   <meta name="theme-color" content="#eef3f1">
   <title>Picture Cube Solver</title>
   <!-- pages:head -->
@@ -24,7 +24,6 @@
       <a class="pages-brand" href="./">Picture Cube Solver</a>
       <nav class="pages-nav" aria-label="Primary navigation">
         <a href="#scanner">Scan</a>
-        <a href="#how-it-works">How it works</a>
         <a href="https://github.com/kitty-crow/cube-solver">GitHub</a>
       </nav>
       <button class="pages-theme" type="button" data-theme-toggle aria-pressed="false">
@@ -35,40 +34,34 @@
   </header>
 
   <main id="content" class="pages-main app-main">
-    <section class="hero">
-      <div>
-        <p class="pages-eyebrow">3×3 picture cubes</p>
-        <h1>Scan the cube. Follow the turns.</h1>
-        <p class="pages-lead">Built for cubes where every sticker is part of a continuous image, including ocean-heavy Earth cubes that ordinary colour scanners cannot distinguish.</p>
-      </div>
-      <div class="privacy-pill" aria-label="Privacy information">Camera processing stays in this browser</div>
+    <section class="tool-head">
+      <h1>Picture Cube Solver</h1>
+      <label class="cube-size-picker" for="cube-size">
+        <span>Cube</span>
+        <select id="cube-size">
+          <option value="2">2×2×2</option>
+          <option value="3" selected>3×3×3</option>
+          <option value="4">4×4×4</option>
+        </select>
+      </label>
     </section>
 
     <section id="scanner" class="scanner-layout" aria-labelledby="scan-title">
       <div class="camera-panel pages-panel">
         <div class="camera-stage">
           <video id="camera" playsinline muted></video>
-          <div class="face-guide" aria-hidden="true">
-            <span class="face-guide__v face-guide__v--1"></span>
-            <span class="face-guide__v face-guide__v--2"></span>
-            <span class="face-guide__h face-guide__h--1"></span>
-            <span class="face-guide__h face-guide__h--2"></span>
-          </div>
-          <div class="camera-empty">
-            <strong>Camera off</strong>
-            <span>Use the rear camera if your device has one.</span>
-          </div>
+          <div id="face-guide" class="face-guide" aria-hidden="true"></div>
+          <div class="camera-empty"><strong>Camera off</strong></div>
           <div id="stability-label" class="stability-badge">Start camera</div>
         </div>
         <canvas id="capture-canvas" hidden></canvas>
         <canvas id="probe-canvas" hidden></canvas>
-
         <div class="camera-actions">
           <button id="start-camera" class="pages-button pages-button--primary" type="button">Start camera</button>
           <button id="capture-face" class="pages-button pages-button--primary" type="button" disabled>Capture face</button>
           <label class="auto-toggle">
             <input id="auto-capture" type="checkbox" checked>
-            <span>Auto-capture when steady</span>
+            <span>Auto-capture</span>
           </label>
         </div>
       </div>
@@ -78,12 +71,12 @@
           <span id="scan-counter" class="scan-counter">1 / 6</span>
           <span id="worker-status" class="runtime-status">Loading Python…</span>
         </div>
-        <h2 id="scan-title">Scan your first side</h2>
-        <p id="scan-instruction">Choose any side as the front. Keep the cube upright and centre the whole 3×3 face inside the guide.</p>
+        <h2 id="scan-title">Scan front</h2>
+        <p id="scan-instruction">Choose a front face and keep the cube upright.</p>
         <div class="turn-cue" aria-hidden="true">
-          <div class="turn-cue__cube">3×3</div>
+          <div id="turn-cube-size" class="turn-cue__cube">3×3</div>
           <div class="turn-cue__arrow">↻</div>
-          <span>Side scans: rotate the whole cube clockwise as viewed from above.</span>
+          <span>Rotate the whole cube clockwise between side scans.</span>
         </div>
         <div class="scan-progress" aria-hidden="true"><span id="scan-progress"></span></div>
         <button id="solve-cube" class="pages-button pages-button--primary solve-button" type="button" disabled>Loading Python…</button>
@@ -91,60 +84,34 @@
     </section>
 
     <section class="review-section" aria-labelledby="review-title">
-      <div class="section-heading">
-        <div>
-          <p class="pages-eyebrow">Review</p>
-          <h2 id="review-title">Captured faces</h2>
-        </div>
-        <p>Rotate a capture only if its orientation does not match the physical instructions above. Retaking does not restart the other five scans.</p>
-      </div>
-      <div id="review-grid" class="review-grid"><p class="review-empty">Captured faces will appear here.</p></div>
+      <div class="section-heading"><h2 id="review-title">Captured faces</h2></div>
+      <div id="review-grid" class="review-grid"><p class="review-empty">No captures yet.</p></div>
     </section>
 
     <section id="result-panel" class="result-section pages-panel" hidden aria-labelledby="result-title">
       <div class="result-head">
-        <div>
-          <p class="pages-eyebrow">Solution</p>
-          <h2 id="result-title">Follow the 3D cube</h2>
-          <p id="result-summary">Solution ready</p>
-        </div>
+        <div><h2 id="result-title">Solution</h2><p id="result-summary"></p></div>
         <p id="confidence-text" class="confidence-text"></p>
       </div>
       <div class="result-grid">
         <div id="cube-view" class="cube-view" aria-label="Interactive 3D model of the scanned cube"></div>
         <div class="move-panel">
           <div id="move-text" class="move-token">Ready</div>
-          <p id="move-detail">Use Next or Play to animate the solution.</p>
+          <p id="move-detail"></p>
           <div class="move-buttons">
             <button id="prev-move" class="pages-button" type="button" disabled>Previous</button>
             <button id="play-moves" class="pages-button pages-button--primary" type="button">Play</button>
             <button id="next-move" class="pages-button" type="button">Next</button>
           </div>
-          <button id="reset-playback" class="pages-button pages-button--quiet" type="button" disabled>Reset animation</button>
-          <p class="notation-note">Clockwise and anti-clockwise are always described while looking directly at the face being turned.</p>
+          <button id="reset-playback" class="pages-button pages-button--quiet" type="button" disabled>Reset</button>
         </div>
-      </div>
-    </section>
-
-    <section id="how-it-works" class="explain-section">
-      <div class="section-heading">
-        <div>
-          <p class="pages-eyebrow">Under the bonnet</p>
-          <h2>It solves the picture, not six colours.</h2>
-        </div>
-      </div>
-      <div class="explain-grid">
-        <article class="pages-panel"><strong>1. Live capture</strong><p>The scan order establishes the six fixed-centre faces. Each face is split into 3×3 image tiles after capture.</p></article>
-        <article class="pages-panel"><strong>2. Python reconstruction</strong><p>A Pyodide worker compares border continuity while tracking the rigid 3D orientation of each physical edge and corner cubie.</p></article>
-        <article class="pages-panel"><strong>3. Cube constraints</strong><p>One-to-one assignments are constrained by edge flip, corner twist and permutation parity, so visually plausible but impossible states are rejected.</p></article>
-        <article class="pages-panel"><strong>4. Solve and animate</strong><p>A two-phase solver produces the turns. Picture-centre orientation is tracked separately and corrected after the ordinary cubies are solved.</p></article>
       </div>
     </section>
   </main>
 
   <footer class="pages-footer">
     <span data-version>v…</span>
-    <span>Local camera processing · <a href="https://github.com/kitty-crow/cube-solver">Source</a></span>
+    <span><a href="https://github.com/kitty-crow/cube-solver">Source</a></span>
   </footer>
   <!-- pages:body -->
   <script type="module" src="./app.js"></script>
