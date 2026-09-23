@@ -50,6 +50,8 @@ export class CubeView {
     this.size = 3;
     this._resizeObserver = new ResizeObserver(() => this.resize());
     this._resizeObserver.observe(this.container);
+    this._clearImageListener = () => this.clear();
+    window.addEventListener("picture-image-memory-cleared", this._clearImageListener);
 
     this.scene.add(new THREE.HemisphereLight(0xffffff, 0x718078, 2.2));
     const key = new THREE.DirectionalLight(0xffffff, 1.4);
@@ -61,6 +63,9 @@ export class CubeView {
 
   dispose() {
     this._resizeObserver.disconnect();
+    window.removeEventListener("picture-image-memory-cleared", this._clearImageListener);
+    this.clear();
+    this.controls.dispose?.();
     this.renderer.dispose();
     this.container.textContent = "";
   }
@@ -123,6 +128,9 @@ export class CubeView {
         }
       }
     }
+
+    boxGeometry.dispose();
+    black.dispose();
 
     for (let f = 0; f < 6; f += 1) {
       const face = FACE_NAMES[f];
