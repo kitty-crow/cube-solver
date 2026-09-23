@@ -76,6 +76,26 @@ def _solve_3x3(raw: bytes, tile_size: int) -> dict:
     }
 
 
+def _patch_bigcube_semantic_scoring(bigcube) -> None:
+    if getattr(bigcube, "_SEMANTIC_SCORING_PATCHED", False):
+        return
+    original = bigcube._incremental_score
+
+    def scored(bank, candidate, occupancy):
+        absolute = sum(
+            bank.placement_score(
+                placement.source_facelet,
+                placement.rot,
+                placement.target_facelet,
+            )
+            for placement in candidate.placements
+        )
+        return original(bank, candidate, occupancy) + absolute
+
+    bigcube._incremental_score = scored
+    bigcube._SEMANTIC_SCORING_PATCHED = True
+
+
 def _reference_summary(evidence) -> dict | None:
     if not isinstance(evidence, dict):
         return None
@@ -109,8 +129,7 @@ def solve_scan(payload_json: str) -> str:
             result = _solve_3x3(raw, tile_size)
         elif size == 4:
             from . import bigcube
-            from .semantic_scoring import patch_incremental_reconstructor
-            patch_incremental_reconstructor(bigcube)
+            _patch_bigcube_semantic_scoring(bigcube)
             result = bigcube.solve_scan_4x4(raw, tile_size)
         else:
             raise ValueError(f"Unsupported cube size: {size}×{size}×{size}")
