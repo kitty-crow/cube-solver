@@ -17,8 +17,19 @@ def set_visual_evidence(evidence) -> None:
     _ACTIVE_EVIDENCE = evidence
 
 
+def _decode_f32(encoded: str, expected: int):
+    try:
+        values = array("f")
+        values.frombytes(base64.b64decode(encoded))
+        if sys.byteorder != "little":
+            values.byteswap()
+    except Exception:
+        return None
+    return values if len(values) == expected else None
+
+
 class TileBank:
-    """Rotation-aware sticker descriptors with optional ensemble seam evidence."""
+    """Rotation-aware sticker descriptors with seam and absolute reference evidence."""
 
     def __init__(self, raw: bytes, size: int, tile_count: int = 54, evidence=None):
         expected = tile_count * size * size * 3
@@ -29,13 +40,15 @@ class TileBank:
         self.tile_count = tile_count
         self._profiles: dict[tuple[int, int, str], tuple[tuple[float, float, float, float], ...]] = {}
         self._states = tile_count * 4
-        self._external = self._decode_evidence(_ACTIVE_EVIDENCE if evidence is None else evidence)
+        active = _ACTIVE_EVIDENCE if evidence is None else evidence
+        self._external = self._decode_seam_evidence(active)
+        self._absolute, self._reference_fit = self._decode_absolute_evidence(active)
         for tile in range(tile_count):
             for rot in range(4):
                 for side in SIDES:
                     self._profiles[(tile, rot, side)] = self._make_profile(tile, rot, side)
 
-    def _decode_evidence(self, evidence):
+    def _decode_seam_evidence(self, evidence):
         if not isinstance(evidence, dict):
             return None
         if int(evidence.get("version", 0)) != 1:
@@ -45,17 +58,28 @@ class TileBank:
         encoded = evidence.get("seam_f32_b64")
         if not isinstance(encoded, str) or not encoded:
             return None
-        try:
-            values = array("f")
-            values.frombytes(base64.b64decode(encoded))
-            if sys.byteorder != "little":
-                values.byteswap()
-        except Exception:
-            return None
-        expected = 4 * self._states * self._states
-        if len(values) != expected:
-            return None
-        return values
+        return _decode_f32(encoded, 4 * self._states * self._states)
+
+    def _decode_absolute_evidence(self, evidence):
+        if not isinstance(evidence, dict):
+            return None, 0.0
+        reference = evidence.get("reference_evidence")
+        if not isinstance(reference, dict):
+            return None, 0.0
+        if int(reference.get("version", 0)) != 1:
+            return None, 0.0
+        targets = int(reference.get("targets", 0))
+        states = int(reference.get("states", 0))
+        if targets != self.tile_count or states != self._states:
+            return None, 0.0
+        encoded = reference.get("absolute_f32_b64")
+        if not isinstance(encoded, str) or not encoded:
+            return None, 0.0
+        values = _decode_f32(encoded, self._states * self.tile_count)
+        if values is None:
+            return None, 0.0
+        fit = float(reference.get("fit", 0.0) or 0.0)
+        return values, max(0.0, min(1.0, fit))
 
     def _rgb_rot(self, tile: int, x: int, y: int, rot: int) -> tuple[int, int, int]:
         n = self.size
@@ -115,6 +139,35 @@ class TileBank:
             return None
         return max(0.0, min(1.0, sum(values) / len(values)))
 
+    def absolute_compatibility(self, tile: int, rot: int, target_facelet: int) -> float | None:
+        if self._absolute is None:
+            return None
+        if not (0 <= tile < self.tile_count and 0 <= target_facelet < self.tile_count):
+            return None
+        state = tile * 4 + (rot % 4)
+        value = float(self._absolute[state * self.tile_count + target_facelet])
+        if not math.isfinite(value):
+            return None
+        return max(0.0, min(1.0, value))
+
+    def placement_score(self, tile: int, rot: int, target_facelet: int) -> float:
+        """Absolute reference evidence for one proposed sticker destination.
+
+        This is intentionally additive rather than mandatory. A wrong or weak
+        internet reference cannot create an illegal cube state, while a strong
+        reference can resolve ocean/sky/texture ambiguity that seam matching
+        alone cannot distinguish.
+        """
+        value = self.absolute_compatibility(tile, rot, target_facelet)
+        if value is None:
+            return 0.0
+        # Ignore very weak reference fits. Above that threshold, let absolute
+        # evidence become comparable to several seam terms but not dominate a
+        # clearly contradictory physical picture reconstruction.
+        confidence = max(0.0, (self._reference_fit - 0.42) / 0.38)
+        confidence = min(1.0, confidence)
+        return 0.24 * confidence * (2.0 * value - 1.0)
+
     @lru_cache(maxsize=262144)
     def compatibility(self, a: int, ar: int, aside: str, b: int, br: int, bside: str) -> float:
         pa = self._profiles[(a, ar % 4, aside)]
@@ -130,6 +183,4 @@ class TileBank:
         learned = self.external_compatibility(a, ar, aside, b, br, bside)
         if learned is None:
             return base
-        # The deterministic border metric remains the anchor. Ensemble evidence
-        # can strongly break visually ambiguous ties without overriding geometry.
         return base + 0.10 * (2.0 * learned - 1.0)
