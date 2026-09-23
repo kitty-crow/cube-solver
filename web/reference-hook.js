@@ -21,9 +21,35 @@ function payloadKey(payload) {
 const solveButton = document.querySelector("#solve-cube");
 const reviewGrid = document.querySelector("#review-grid");
 const workerStatus = document.querySelector("#worker-status");
+const solveProgressWrap = document.querySelector("#solve-progress-wrap");
+const solveProgressTrack = document.querySelector("#solve-progress-track");
+const solveProgressBar = document.querySelector("#solve-progress-bar");
+const solveProgressLabel = document.querySelector("#solve-progress-label");
+const solveProgressValue = document.querySelector("#solve-progress-value");
+
+function semanticProgress(detail, progress) {
+  if (!solveProgressWrap || !Number.isFinite(progress)) return;
+  const value = Math.max(0, Math.min(1, Number(progress)));
+  const percent = Math.round(value * 100);
+  solveProgressWrap.hidden = false;
+  solveProgressBar.style.width = `${percent}%`;
+  solveProgressValue.textContent = `${percent}%`;
+  solveProgressTrack.setAttribute("aria-valuenow", String(percent));
+  solveProgressLabel.textContent = detail || "Identifying artwork…";
+}
+
+function hideSemanticProgress() {
+  if (!solveProgressWrap) return;
+  solveProgressWrap.hidden = true;
+  solveProgressBar.style.width = "0%";
+  solveProgressValue.textContent = "0%";
+  solveProgressTrack.setAttribute("aria-valuenow", "0");
+}
+
 const assistant = new ReferenceAssistant({
-  onStatus(detail) {
+  onStatus(detail, progress) {
     if (workerStatus && detail) workerStatus.textContent = detail;
+    semanticProgress(detail, progress);
   },
 });
 window.pictureReference = assistant;
@@ -54,6 +80,7 @@ function invalidateForScanChange() {
   analysedKey = "";
   allowSolve = false;
   failedSubject = "";
+  hideSemanticProgress();
   assistant.invalidate();
   clearTimeout(scanRefreshTimer);
   scanRefreshTimer = setTimeout(refreshAvailability, 180);
@@ -65,6 +92,7 @@ window.addEventListener("picture-image-memory-cleared", () => {
   analysedKey = "";
   allowSolve = false;
   failedSubject = "";
+  hideSemanticProgress();
   assistant.invalidate();
   assistant.panel.hidden = true;
 });
@@ -87,6 +115,7 @@ solveButton.addEventListener("click", (event) => {
   const subjectMatches = !currentSubject || currentSubject === assistant.lastSubject || currentSubject === failedSubject;
   if (allowSolve && subjectMatches) {
     allowSolve = false;
+    hideSemanticProgress();
     assistant.persistSelected().catch(() => {});
     return;
   }
@@ -99,6 +128,7 @@ solveButton.addEventListener("click", (event) => {
   solveButton.disabled = true;
   solveButton.textContent = "Identifying artwork…";
   assistant.panel.hidden = false;
+  semanticProgress("Recognising six faces…", 0.01);
 
   (async () => {
     const payload = await savedPayload().catch(() => null);
@@ -118,6 +148,7 @@ solveButton.addEventListener("click", (event) => {
     allowSolve = true;
     solveButton.textContent = "Solve without reference";
   }).finally(() => {
+    hideSemanticProgress();
     solveButton.disabled = false;
     analysing = false;
   });
