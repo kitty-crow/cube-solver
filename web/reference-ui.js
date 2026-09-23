@@ -1,8 +1,22 @@
+const RUNTIME_DB = "picture-cube-solver-runtime";
+const RUNTIME_DB_VERSION = 2;
+const EVIDENCE_STORE = "evidence";
+const REFERENCE_STORE = "reference";
+const FACE_ORDER = ["U", "R", "F", "D", "L", "B"];
+const TILE_SIZE = 48;
+
 function decodeBase64(encoded) {
   const binary = atob(encoded);
   const bytes = new Uint8Array(binary.length);
   for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
   return bytes;
+}
+
+function bytesToBase64(bytes) {
+  let binary = "";
+  const chunk = 0x8000;
+  for (let i = 0; i < bytes.length; i += chunk) binary += String.fromCharCode(...bytes.subarray(i, i + chunk));
+  return btoa(binary);
 }
 
 function fingerprint(payload) {
@@ -13,6 +27,48 @@ function fingerprint(payload) {
     hash = Math.imul(hash, 0x01000193);
   }
   return (hash >>> 0).toString(16);
+}
+
+function openRuntimeDb() {
+  return new Promise((resolve, reject) => {
+    const request = indexedDB.open(RUNTIME_DB, RUNTIME_DB_VERSION);
+    request.onupgradeneeded = () => {
+      const db = request.result;
+      if (!db.objectStoreNames.contains(EVIDENCE_STORE)) db.createObjectStore(EVIDENCE_STORE, { keyPath: "key" });
+      if (!db.objectStoreNames.contains(REFERENCE_STORE)) db.createObjectStore(REFERENCE_STORE, { keyPath: "key" });
+    };
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error || new Error("Could not open reference storage"));
+  });
+}
+
+async function storeCurrentReference(size, evidence) {
+  if (!globalThis.indexedDB) return;
+  const db = await openRuntimeDb();
+  try {
+    const tx = db.transaction(REFERENCE_STORE, "readwrite");
+    const store = tx.objectStore(REFERENCE_STORE);
+    store.clear();
+    if (evidence) store.put({ key: "current", size: Number(size), evidence, savedAt: Date.now() });
+    await new Promise((resolve, reject) => {
+      tx.oncomplete = resolve;
+      tx.onerror = () => reject(tx.error || new Error("Could not store selected reference"));
+      tx.onabort = () => reject(tx.error || new Error("Could not store selected reference"));
+    });
+  } finally {
+    db.close();
+  }
+}
+
+async function clearCurrentReference() {
+  if (!globalThis.indexedDB) return;
+  const db = await openRuntimeDb();
+  try {
+    const tx = db.transaction(REFERENCE_STORE, "readwrite");
+    tx.objectStore(REFERENCE_STORE).clear();
+  } finally {
+    db.close();
+  }
 }
 
 function addStyles() {
@@ -113,6 +169,7 @@ export class ReferenceAssistant {
         this.selectedIndex = Number.isInteger(msg.selectedIndex) ? msg.selectedIndex : -1;
         this.lastSubject = msg.subject || "";
         this.render();
+        this.persistSelected().catch((error) => console.warn("Could not persist selected reference", error));
         pending?.resolve(msg);
         return;
       }
@@ -142,6 +199,7 @@ export class ReferenceAssistant {
     this.candidatesEl.textContent = "";
     this.guessesEl.textContent = "";
     this.statusEl.textContent = "Scan changed · reference analysis will refresh";
+    clearCurrentReference().catch(() => {});
   }
 
   async analyse(payload, subject = "") {
@@ -175,6 +233,7 @@ export class ReferenceAssistant {
     this.lastPayload = { ...payload };
     const key = fingerprint(payload);
     if (!this.result || this.lastKey !== key) await this.analyse(payload, this.subjectEl.value.trim());
+    await this.persistSelected();
     return this.selectedEvidence();
   }
 
@@ -195,6 +254,12 @@ export class ReferenceAssistant {
         fit: Number(candidate.fit || 0),
       },
     };
+  }
+
+  async persistSelected() {
+    const evidence = this.selectedEvidence();
+    await storeCurrentReference(Number(this.lastPayload?.size || 0), evidence);
+    return evidence;
   }
 
   render() {
@@ -219,19 +284,31 @@ export class ReferenceAssistant {
       if (index === this.selectedIndex) card.classList.add("reference-card--selected");
       if (!candidate.usable) card.classList.add("reference-card--unusable");
       card.disabled = !candidate.usable;
+
+      const image = document.createElement("img");
+      image.alt = "";
+      image.loading = "lazy";
+      image.src = candidate.thumbnailUrl;
+      const body = document.createElement("span");
+      body.className = "reference-card__body";
+      const title = document.createElement("span");
+      title.className = "reference-card__title";
+      title.textContent = candidate.title.replace(/^File:/, "");
+      const meta = document.createElement("span");
+      meta.className = "reference-card__meta";
       const fit = candidate.usable ? `${(candidate.fit * 100).toFixed(0)}% fit` : candidate.reason || "not a cube net";
-      card.innerHTML = `
-        <img alt="" loading="lazy" src="${candidate.thumbnailUrl}">
-        <span class="reference-card__body">
-          <span class="reference-card__title">${candidate.title.replace(/^File:/, "")}</span>
-          <span class="reference-card__meta">${candidate.layout || fit}${candidate.usable ? ` · ${fit}` : ""}</span>
-          <span class="reference-card__meta">${candidate.licence || "Wikimedia Commons"}</span>
-        </span>
-      `;
+      meta.textContent = candidate.usable ? `${candidate.layout || "cube net"} · ${fit}` : fit;
+      const licence = document.createElement("span");
+      licence.className = "reference-card__meta";
+      licence.textContent = candidate.licence || "Wikimedia Commons";
+      body.append(title, meta, licence);
+      card.append(image, body);
+
       if (candidate.usable) {
         card.addEventListener("click", () => {
           this.selectedIndex = index;
           this.render();
+          this.persistSelected().catch((error) => console.warn("Could not persist selected reference", error));
         });
       }
       this.candidatesEl.appendChild(card);
@@ -241,6 +318,112 @@ export class ReferenceAssistant {
   showError(error) {
     this.panel.hidden = false;
     this.statusEl.textContent = error instanceof Error ? error.message : String(error);
+    clearCurrentReference().catch(() => {});
     this.onStatus("Reference analysis unavailable · continuing without it", 1);
   }
 }
+
+function payloadFromReview() {
+  const size = Number(document.querySelector("#cube-size")?.value || 3);
+  const byFace = new Map();
+  for (const card of document.querySelectorAll("#review-grid .scan-card")) {
+    const face = card.querySelector(".scan-card__head span")?.textContent?.trim();
+    const canvas = card.querySelector("canvas");
+    if (FACE_ORDER.includes(face) && canvas) byFace.set(face, canvas);
+  }
+  if (byFace.size !== 6) return null;
+
+  const tileCount = 6 * size * size;
+  const rgb = new Uint8Array(tileCount * TILE_SIZE * TILE_SIZE * 3);
+  let write = 0;
+  const scratch = document.createElement("canvas");
+  scratch.width = TILE_SIZE;
+  scratch.height = TILE_SIZE;
+  const ctx = scratch.getContext("2d", { alpha: false, willReadFrequently: true });
+  for (const face of FACE_ORDER) {
+    const source = byFace.get(face);
+    const cell = source.width / size;
+    const inset = cell * 0.055;
+    for (let row = 0; row < size; row += 1) {
+      for (let col = 0; col < size; col += 1) {
+        ctx.clearRect(0, 0, TILE_SIZE, TILE_SIZE);
+        ctx.drawImage(source, col * cell + inset, row * cell + inset, cell - 2 * inset, cell - 2 * inset, 0, 0, TILE_SIZE, TILE_SIZE);
+        const data = ctx.getImageData(0, 0, TILE_SIZE, TILE_SIZE).data;
+        for (let p = 0; p < data.length; p += 4) {
+          rgb[write++] = data[p];
+          rgb[write++] = data[p + 1];
+          rgb[write++] = data[p + 2];
+        }
+      }
+    }
+  }
+  return { size, tile_size: TILE_SIZE, rgb_b64: bytesToBase64(rgb) };
+}
+
+function releaseCameraForRecognition() {
+  const video = document.querySelector("#camera");
+  const stream = video?.srcObject;
+  for (const track of stream?.getTracks?.() || []) track.stop();
+  if (video) video.srcObject = null;
+  document.querySelector(".camera-stage")?.classList.remove("camera-stage--live");
+}
+
+function bootstrap() {
+  const solveButton = document.querySelector("#solve-cube");
+  const reviewGrid = document.querySelector("#review-grid");
+  if (!solveButton || !reviewGrid) return;
+
+  const assistant = new ReferenceAssistant();
+  window.pictureReference = assistant;
+  let replaying = false;
+  let mutationTimer = null;
+
+  const syncScan = () => {
+    clearTimeout(mutationTimer);
+    mutationTimer = setTimeout(() => {
+      const payload = payloadFromReview();
+      if (!payload) {
+        assistant.invalidate();
+        assistant.panel.hidden = true;
+        return;
+      }
+      assistant.panel.hidden = false;
+      assistant.lastPayload = payload;
+      assistant.statusEl.textContent = assistant.result ? assistant.statusEl.textContent : "Ready to identify artwork";
+    }, 100);
+  };
+  new MutationObserver(() => {
+    assistant.invalidate();
+    syncScan();
+  }).observe(reviewGrid, { childList: true, subtree: true });
+  syncScan();
+
+  solveButton.addEventListener("click", async (event) => {
+    if (replaying) {
+      replaying = false;
+      return;
+    }
+    const payload = payloadFromReview();
+    if (!payload) return;
+    event.preventDefault();
+    event.stopImmediatePropagation();
+
+    const oldText = solveButton.textContent;
+    solveButton.disabled = true;
+    solveButton.textContent = "Identifying artwork…";
+    releaseCameraForRecognition();
+    try {
+      await assistant.ensure(payload);
+    } catch (error) {
+      console.warn("Reference-assisted reconstruction unavailable", error);
+      await clearCurrentReference().catch(() => {});
+    } finally {
+      solveButton.disabled = false;
+      solveButton.textContent = oldText;
+      replaying = true;
+      solveButton.click();
+    }
+  }, true);
+}
+
+bootstrap();
