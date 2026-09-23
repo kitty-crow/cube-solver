@@ -6,6 +6,15 @@ import json
 from .centres import CUBE_ROTATIONS, centre_correction, centres_after_solution
 from .geometry import FACE_INDEX, FACE_NAMES, FACE_NORMAL, FACE_RIGHT, FACE_UP, EDGE_GEOM, CORNER_GEOM
 from .reconstruct import reconstruct
+from .vision import set_visual_evidence
+from . import generic as _generic
+from .surface import face_neighbours as _surface_face_neighbours
+
+# All NxN reconstructors import generic.face_neighbours lazily. Replace the
+# flat-face graph with the wrapped physical surface graph before those modules
+# are imported, so picture continuity across all 12 cube edges participates in
+# the same beam search as ordinary in-face seams.
+_generic.face_neighbours = _surface_face_neighbours
 
 _SOLVER_READY = False
 
@@ -67,16 +76,26 @@ def solve_scan(payload_json: str) -> str:
     size = int(payload.get("size", 3))
     tile_size = int(payload["tile_size"])
     raw = base64.b64decode(payload["rgb_b64"])
+    evidence = payload.get("visual_evidence")
 
-    if size == 2:
-        from .pocket import solve_scan_2x2
-        result = solve_scan_2x2(raw, tile_size)
-    elif size == 3:
-        result = _solve_3x3(raw, tile_size)
-    elif size == 4:
-        from .bigcube import solve_scan_4x4
-        result = solve_scan_4x4(raw, tile_size)
-    else:
-        raise ValueError(f"Unsupported cube size: {size}×{size}×{size}")
+    set_visual_evidence(evidence)
+    try:
+        if size == 2:
+            from .pocket import solve_scan_2x2
+            result = solve_scan_2x2(raw, tile_size)
+        elif size == 3:
+            result = _solve_3x3(raw, tile_size)
+        elif size == 4:
+            from .bigcube import solve_scan_4x4
+            result = solve_scan_4x4(raw, tile_size)
+        else:
+            raise ValueError(f"Unsupported cube size: {size}×{size}×{size}")
+    finally:
+        set_visual_evidence(None)
 
+    if isinstance(evidence, dict):
+        result["visual_ensemble"] = {
+            "models": evidence.get("models", {}),
+            "capabilities": evidence.get("capabilities", {}),
+        }
     return json.dumps(result, separators=(",", ":"))
