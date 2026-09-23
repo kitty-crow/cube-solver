@@ -1,5 +1,6 @@
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
+import { RoundedBoxGeometry } from "three/addons/geometries/RoundedBoxGeometry.js";
 
 const FACE_NAMES = ["U", "R", "F", "D", "L", "B"];
 const NORMAL = {
@@ -22,6 +23,30 @@ function parseMove(token) {
   const layers = wide ? Number(prefix || 2) : 1;
   const turns = suffix === "2" ? 2 : suffix === "'" ? -1 : 1;
   return { face, layers, turns };
+}
+
+function roundedStickerGeometry(size = 0.86, radius = 0.105) {
+  const half = size / 2;
+  const r = Math.min(radius, half * 0.48);
+  const shape = new THREE.Shape();
+  shape.moveTo(-half + r, -half);
+  shape.lineTo(half - r, -half);
+  shape.quadraticCurveTo(half, -half, half, -half + r);
+  shape.lineTo(half, half - r);
+  shape.quadraticCurveTo(half, half, half - r, half);
+  shape.lineTo(-half + r, half);
+  shape.quadraticCurveTo(-half, half, -half, half - r);
+  shape.lineTo(-half, -half + r);
+  shape.quadraticCurveTo(-half, -half, -half + r, -half);
+  const geometry = new THREE.ShapeGeometry(shape, 6);
+  const position = geometry.getAttribute("position");
+  const uv = new Float32Array(position.count * 2);
+  for (let i = 0; i < position.count; i += 1) {
+    uv[i * 2] = position.getX(i) / size + 0.5;
+    uv[i * 2 + 1] = position.getY(i) / size + 0.5;
+  }
+  geometry.setAttribute("uv", new THREE.BufferAttribute(uv, 2));
+  return geometry;
 }
 
 function easeInOut(t) { return t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2; }
@@ -48,6 +73,7 @@ export class CubeView {
     this.cubelets = [];
     this.busy = false;
     this.size = 3;
+    this.rounded = false;
     this._resizeObserver = new ResizeObserver(() => this.resize());
     this._resizeObserver.observe(this.container);
     this._clearImageListener = () => this.clear();
@@ -99,16 +125,22 @@ export class CubeView {
     this.cubelets = [];
   }
 
-  build(tileCanvases, size = 3) {
+  build(tileCanvases, size = 3, { rounded = false } = {}) {
     this.clear();
     this.size = size;
+    this.rounded = Boolean(rounded);
     const centre = (size - 1) / 2;
     const distance = Math.max(5.2, size * 2.35);
     this.camera.position.set(distance * 0.82, distance * 0.68, distance);
     this.controls.minDistance = size * 1.45;
     this.controls.maxDistance = size * 4.2;
 
-    const boxGeometry = new THREE.BoxGeometry(0.94, 0.94, 0.94);
+    const boxGeometry = this.rounded
+      ? new RoundedBoxGeometry(0.94, 0.94, 0.94, 4, 0.085)
+      : new THREE.BoxGeometry(0.94, 0.94, 0.94);
+    const stickerGeometry = this.rounded
+      ? roundedStickerGeometry(0.86, 0.105)
+      : new THREE.PlaneGeometry(0.86, 0.86);
     const black = new THREE.MeshStandardMaterial({ color: 0x101312, roughness: 0.68, metalness: 0.05 });
     const cubeletByKey = new Map();
 
@@ -151,16 +183,17 @@ export class CubeView {
         texture.minFilter = THREE.LinearFilter;
         texture.magFilter = THREE.LinearFilter;
         const sticker = new THREE.Mesh(
-          new THREE.PlaneGeometry(0.86, 0.86),
+          stickerGeometry.clone(),
           new THREE.MeshBasicMaterial({ map: texture, side: THREE.DoubleSide }),
         );
-        sticker.position.copy(normal.clone().multiplyScalar(0.481));
+        sticker.position.copy(normal.clone().multiplyScalar(this.rounded ? 0.486 : 0.481));
         const basis = new THREE.Matrix4();
         basis.makeBasis(right, up, normal);
         sticker.quaternion.setFromRotationMatrix(basis);
         cubelet.add(sticker);
       }
     }
+    stickerGeometry.dispose();
   }
 
   async move(token, duration = 430) {
