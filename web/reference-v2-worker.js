@@ -30,6 +30,7 @@ function same(a,b){ return a[0]===b[0]&&a[1]===b[1]&&a[2]===b[2]; }
 function key(v){ return v.join(","); }
 function clamp(v,a=0,b=1){ return Math.max(a,Math.min(b,v)); }
 function normalise(v){ const n=Math.hypot(...v)||1; return v.map(x=>x/n); }
+function median(values){const x=[...values].sort((a,b)=>a-b),m=Math.floor(x.length/2);return x.length%2?x[m]:(x[m-1]+x[m])/2;}
 
 function rotate90(vector, axis, quarters) {
   let out=vector;
@@ -59,12 +60,49 @@ function rotateContinuous(v,yaw,pitch,roll){
   return [x,y,z];
 }
 
-function statePixel(raw,tileSize,state,x,y){
+function rawStatePixel(raw,tileSize,state,x,y){
   const tile=Math.floor(state/4), rot=state%4, n=tileSize;
   let ox=x,oy=y;
   if(rot===1){ox=y;oy=n-1-x;} else if(rot===2){ox=n-1-x;oy=n-1-y;} else if(rot===3){ox=n-1-y;oy=x;}
   const o=((tile*n*n)+oy*n+ox)*3;
   return [raw[o],raw[o+1],raw[o+2]];
+}
+
+function pixelStats(rgb){
+  const [r,g,b]=rgb,max=Math.max(r,g,b),min=Math.min(r,g,b),lum=(.2126*r+.7152*g+.0722*b)/255,sat=(max-min)/Math.max(1,max);
+  return {lum,sat,max:max/255};
+}
+
+function glareLikelihood(raw,tileSize,state,x,y){
+  const rgb=rawStatePixel(raw,tileSize,state,x,y),s=pixelStats(rgb);
+  if(s.lum<.70||s.sat>.30)return 0;
+  const lums=[];
+  for(const [dx,dy] of [[-2,0],[2,0],[0,-2],[0,2],[-1,-1],[1,-1],[-1,1],[1,1]]){
+    const nx=Math.max(0,Math.min(tileSize-1,x+dx)),ny=Math.max(0,Math.min(tileSize-1,y+dy));
+    lums.push(pixelStats(rawStatePixel(raw,tileSize,state,nx,ny)).lum);
+  }
+  const local=median(lums),spike=clamp((s.lum-local-.08)/.22),white=clamp((.28-s.sat)/.28),clip=clamp((s.max-.94)/.06);
+  return clamp(Math.max(spike*white,clip*white*.85));
+}
+
+function statePixel(raw,tileSize,state,x,y){
+  const rgb=rawStatePixel(raw,tileSize,state,x,y),glare=glareLikelihood(raw,tileSize,state,x,y);
+  if(glare<=.02)return rgb;
+  const neighbours=[[],[],[]];
+  for(const [dx,dy] of [[-3,0],[3,0],[0,-3],[0,3],[-2,-2],[2,-2],[-2,2],[2,2]]){
+    const nx=Math.max(0,Math.min(tileSize-1,x+dx)),ny=Math.max(0,Math.min(tileSize-1,y+dy)),p=rawStatePixel(raw,tileSize,state,nx,ny);
+    if(glareLikelihood(raw,tileSize,state,nx,ny)>.35)continue;
+    for(let c=0;c<3;c++)neighbours[c].push(p[c]);
+  }
+  if(!neighbours[0].length)return rgb;
+  const repaired=neighbours.map(median),blend=.92*glare;
+  return rgb.map((value,c)=>value*(1-blend)+repaired[c]*blend);
+}
+
+function estimateGlareFraction(raw,tileSize,tileCount){
+  let glare=0,count=0,step=Math.max(2,Math.floor(tileSize/10));
+  for(let tile=0;tile<tileCount;tile++)for(let y=step;y<tileSize-step;y+=step)for(let x=step;x<tileSize-step;x+=step){glare+=glareLikelihood(raw,tileSize,tile*4,x,y);count++;}
+  return count?glare/count:0;
 }
 
 function faceCanvas(raw,tileSize,size,face,resolution=Math.max(128,size*tileSize)){
@@ -266,7 +304,7 @@ function hungarianMax(matrix){
 }
 function bytesToBase64(bytes){let s="";for(let i=0;i<bytes.length;i+=0x8000)s+=String.fromCharCode(...bytes.subarray(i,i+0x8000));return btoa(s);}
 
-function buildEvidence(scan,size,reference){
+function buildEvidence(scan,size,reference,glareFraction=0){
   const tileCount=6*size*size,states=tileCount*4,aligned=alignReference(scan,reference,size),scores=new Float32Array(states*tileCount),matrix=Array.from({length:tileCount},()=>new Float64Array(tileCount));
   for(let tile=0;tile<tileCount;tile++)for(let target=0;target<tileCount;target++){
     let best=0;
@@ -276,12 +314,12 @@ function buildEvidence(scan,size,reference){
   const matching=hungarianMax(matrix),rawFit=matching.score/tileCount;
   let distinctiveness=0;
   for(let tile=0;tile<tileCount;tile++){
-    const row=Array.from(matrix[tile]),assigned=matching.assignment[tile]>=0?row[matching.assignment[tile]]:0,ordered=[...row].sort((a,b)=>a-b),median=ordered[Math.floor(ordered.length/2)],best=ordered[ordered.length-1],spread=Math.max(0,best-median),reliability=clamp((spread-.012)/.11),rank=row.filter(v=>v<assigned).length/Math.max(1,row.length-1);
-    distinctiveness+=reliability*clamp((rank-.45)/.55);
+    const row=Array.from(matrix[tile]),assigned=matching.assignment[tile]>=0?row[matching.assignment[tile]]:0,ordered=[...row].sort((a,b)=>a-b),medianValue=ordered[Math.floor(ordered.length/2)],best=ordered[ordered.length-1],spread=Math.max(0,best-medianValue),reliability=clamp((spread-.010)/.10),rank=row.filter(v=>v<assigned).length/Math.max(1,row.length-1);
+    distinctiveness+=reliability*clamp((rank-.42)/.58);
   }
   distinctiveness/=tileCount;
-  const fit=clamp(rawFit*(.38+.62*distinctiveness));
-  return{version:1,states,targets:tileCount,absolute_f32_b64:bytesToBase64(new Uint8Array(scores.buffer)),fit,raw_fit:rawFit,distinctiveness};
+  const fit=clamp(rawFit*(.42+.58*distinctiveness));
+  return{version:2,states,targets:tileCount,absolute_f32_b64:bytesToBase64(new Uint8Array(scores.buffer)),fit,raw_fit:rawFit,distinctiveness,glare_fraction:glareFraction};
 }
 
 async function facePreview(image){
@@ -290,7 +328,7 @@ async function facePreview(image){
   const blob=await scaled.convertToBlob({type:"image/jpeg",quality:.76}),bytes=new Uint8Array(await blob.arrayBuffer());return `data:image/jpeg;base64,${bytesToBase64(bytes)}`;
 }
 
-async function scoreCandidate(candidate,raw,tileSize,size,scan){
+async function scoreCandidate(candidate,raw,tileSize,size,scan,glareFraction){
   try{
     const image=await imageDataFromUrl(candidate.thumbnailUrl),net=detectCubeNet(image);let faces=null,layout="",orientation=null;
     if(net){faces=projectCubeNet(image,net);layout=`${net.cols}×${net.rows} cube net`;}
@@ -298,17 +336,18 @@ async function scoreCandidate(candidate,raw,tileSize,size,scan){
       const refined=await refineEquirectangularOrientation(image,scan,size);orientation=refined?.orientation||null;faces=projectEquirectangular(image,192,orientation);layout=orientation?"equirectangular → 6 faces · spherical orientation fitted":"equirectangular → 6 faces";
     }
     if(!faces)return{...candidate,usable:false,reason:"No cube-net or equirectangular projection detected"};
-    const descriptors=referenceDescriptors(faces,size),evidence=buildEvidence(scan,size,descriptors),facePreviews=[];for(const face of faces)facePreviews.push(await facePreview(face));
-    return{...candidate,usable:true,fit:evidence.fit,rawFit:evidence.raw_fit,distinctiveness:evidence.distinctiveness,layout,evidence,facePreviews};
+    const descriptors=referenceDescriptors(faces,size),evidence=buildEvidence(scan,size,descriptors,glareFraction),facePreviews=[];for(const face of faces)facePreviews.push(await facePreview(face));
+    return{...candidate,usable:true,fit:evidence.fit,rawFit:evidence.raw_fit,distinctiveness:evidence.distinctiveness,glareFraction:evidence.glare_fraction,layout,evidence,facePreviews};
   }catch(error){return{...candidate,usable:false,reason:String(error?.message||error)};}
 }
 
 async function analyse(data){
-  const raw=new Uint8Array(data.rawBuffer),tileSize=Number(data.tileSize||48),size=Number(data.size||3),tileCount=6*size*size,scan=scanDescriptors(raw,tileSize,tileCount);let subject=String(data.subject||"").trim(),recognition={faces:[],aggregate:[],model:null};
+  const raw=new Uint8Array(data.rawBuffer),tileSize=Number(data.tileSize||48),size=Number(data.size||3),tileCount=6*size*size,glareFraction=estimateGlareFraction(raw,tileSize,tileCount),scan=scanDescriptors(raw,tileSize,tileCount);let subject=String(data.subject||"").trim(),recognition={faces:[],aggregate:[],model:null};
+  if(glareFraction>.025)status("glare",`Suppressing specular glare (${Math.round(glareFraction*100)}% of sampled image evidence)…`,.02);
   if(!subject){try{recognition=await recogniseFaces(raw,tileSize,size);subject=recognition.subject;}catch(error){subject="picture artwork";postMessage({type:"reference-warning",message:`Artwork recognition unavailable: ${error?.message||error}`});}}
   else recognition={subject,faces:[],aggregate:[],model:null};
   status("search",`Looking for six-face references for “${subject}”…`,.18);const candidates=await searchReferences(subject,recognition.faces),ranked=candidates.slice(0,9),scored=[];
-  for(let i=0;i<ranked.length;i++){status("reference",`Deriving and fitting reference ${i+1} of ${ranked.length}…`,.32+.64*((i+.25)/Math.max(1,ranked.length)));scored.push(await scoreCandidate(ranked[i],raw,tileSize,size,scan));}
+  for(let i=0;i<ranked.length;i++){status("reference",`Deriving and fitting reference ${i+1} of ${ranked.length}…`,.32+.64*((i+.25)/Math.max(1,ranked.length)));scored.push(await scoreCandidate(ranked[i],raw,tileSize,size,scan,glareFraction));}
   scored.sort((a,b)=>a.usable!==b.usable?(a.usable?-1:1):a.usable&&b.usable&&b.fit!==a.fit?b.fit-a.fit:b.searchPriority-a.searchPriority);const selectedIndex=scored.findIndex(x=>x.usable);
   status("complete",selectedIndex>=0?"Six-face reference ready":"No usable six-face reference found",1);
   postMessage({type:"reference-result",subject,faceRecognitions:recognition.faces||[],guesses:recognition.aggregate||[],model:recognition.model||null,candidates:scored,selectedIndex});
