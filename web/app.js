@@ -1,44 +1,5 @@
 import { CubeView } from "./cube-view.js";
 
-const FACE_SEQUENCE = [
-  {
-    face: "F",
-    short: "Front",
-    title: "Scan your first side",
-    instruction: "Choose any side as the front. Keep the cube upright and centre the whole 3×3 face inside the guide.",
-  },
-  {
-    face: "R",
-    short: "Right",
-    title: "Turn clockwise and scan",
-    instruction: "Rotate the whole cube 90° clockwise as viewed from above. Keep the same face on top, then scan the new side.",
-  },
-  {
-    face: "B",
-    short: "Back",
-    title: "Turn clockwise again",
-    instruction: "Rotate the whole cube another 90° clockwise as viewed from above. Keep the top unchanged.",
-  },
-  {
-    face: "L",
-    short: "Left",
-    title: "One more clockwise turn",
-    instruction: "Rotate the whole cube another 90° clockwise as viewed from above and scan the fourth side.",
-  },
-  {
-    face: "U",
-    short: "Top",
-    title: "Scan the top",
-    instruction: "Rotate once more to return to your original front. Tilt the cube so the top faces the camera, with the original front edge at the bottom of the guide.",
-  },
-  {
-    face: "D",
-    short: "Bottom",
-    title: "Scan the bottom",
-    instruction: "Return to the original front, then tilt the cube so the bottom faces the camera. Keep the original front edge at the top of the guide.",
-  },
-];
-
 const FACE_ORDER = ["U", "R", "F", "D", "L", "B"];
 const TILE_SIZE = 48;
 const CAPTURE_SIZE = 768;
@@ -52,6 +13,9 @@ const startButton = $("#start-camera");
 const captureButton = $("#capture-face");
 const autoToggle = $("#auto-capture");
 const solveButton = $("#solve-cube");
+const cubeSizeSelect = $("#cube-size");
+const faceGuide = $("#face-guide");
+const turnCubeSize = $("#turn-cube-size");
 const scanTitle = $("#scan-title");
 const scanInstruction = $("#scan-instruction");
 const scanCounter = $("#scan-counter");
@@ -70,6 +34,7 @@ const resetButton = $("#reset-playback");
 const confidenceText = $("#confidence-text");
 const cubeContainer = $("#cube-view");
 
+let cubeSize = Number(cubeSizeSelect.value);
 let stream = null;
 let scanIndex = 0;
 let retakeFace = null;
@@ -86,19 +51,29 @@ let moveIndex = 0;
 let playing = false;
 let cubeView = null;
 
+function faceSequence() {
+  const n = `${cubeSize}×${cubeSize}`;
+  return [
+    { face: "F", short: "Front", title: "Scan front", instruction: `Choose a front face and centre the ${n} grid.` },
+    { face: "R", short: "Right", title: "Scan right", instruction: "Rotate the whole cube 90° clockwise as viewed from above." },
+    { face: "B", short: "Back", title: "Scan back", instruction: "Rotate the whole cube 90° clockwise again." },
+    { face: "L", short: "Left", title: "Scan left", instruction: "Rotate the whole cube 90° clockwise again." },
+    { face: "U", short: "Top", title: "Scan top", instruction: "Return to the original front. Tilt the top towards the camera with the original front edge at the bottom." },
+    { face: "D", short: "Bottom", title: "Scan bottom", instruction: "Return to the original front. Tilt the bottom towards the camera with the original front edge at the top." },
+  ];
+}
+
 const worker = new Worker(new URL("./solver-worker.js", import.meta.url));
 worker.postMessage({ type: "warm" });
-
 worker.addEventListener("message", (event) => {
   const msg = event.data || {};
-  if (msg.type === "status") {
-    workerStatus.textContent = msg.detail || msg.stage;
-  } else if (msg.type === "python-ready") {
+  if (msg.type === "status") workerStatus.textContent = msg.detail || msg.stage;
+  else if (msg.type === "python-ready") {
     pythonReady = true;
-    workerStatus.textContent = `Python ${msg.version} loaded; building solver tables…`;
+    workerStatus.textContent = `Python ${msg.version}`;
   } else if (msg.type === "solver-ready") {
     workerReady = true;
-    workerStatus.textContent = "Python solver ready";
+    workerStatus.textContent = "Ready";
     updateSolveButton();
   } else if (msg.type === "solution") {
     solving = false;
@@ -112,21 +87,37 @@ worker.addEventListener("message", (event) => {
 });
 
 function currentStep() {
-  if (retakeFace) return FACE_SEQUENCE.find((s) => s.face === retakeFace);
-  return FACE_SEQUENCE[Math.min(scanIndex, FACE_SEQUENCE.length - 1)];
+  const sequence = faceSequence();
+  if (retakeFace) return sequence.find((s) => s.face === retakeFace);
+  return sequence[Math.min(scanIndex, sequence.length - 1)];
+}
+
+function renderGuide() {
+  faceGuide.textContent = "";
+  for (let i = 1; i < cubeSize; i += 1) {
+    const pct = `${(i / cubeSize) * 100}%`;
+    const v = document.createElement("span");
+    v.className = "face-guide__line face-guide__line--v";
+    v.style.left = pct;
+    const h = document.createElement("span");
+    h.className = "face-guide__line face-guide__line--h";
+    h.style.top = pct;
+    faceGuide.append(v, h);
+  }
+  turnCubeSize.textContent = `${cubeSize}×${cubeSize}`;
 }
 
 function updateScanUI() {
   const step = currentStep();
   if (captures.size >= 6 && !retakeFace) {
-    scanTitle.textContent = "All six faces captured";
-    scanInstruction.textContent = "Review the scans below. Rotate or retake any face if the physical orientation does not match the instructions, then solve.";
+    scanTitle.textContent = "Ready to solve";
+    scanInstruction.textContent = "Retake or rotate a capture if needed.";
     scanCounter.textContent = "6 / 6";
     progressBar.style.width = "100%";
     captureButton.disabled = true;
   } else {
     scanTitle.textContent = step.title;
-    scanInstruction.textContent = retakeFace ? `Retake ${step.short}: ${step.instruction}` : step.instruction;
+    scanInstruction.textContent = retakeFace ? `Retake ${step.short}. ${step.instruction}` : step.instruction;
     const shown = retakeFace ? captures.size : scanIndex;
     scanCounter.textContent = `${Math.min(6, shown + 1)} / 6`;
     progressBar.style.width = `${(captures.size / 6) * 100}%`;
@@ -137,25 +128,17 @@ function updateScanUI() {
 
 function updateSolveButton() {
   solveButton.disabled = captures.size !== 6 || solving || !workerReady;
-  if (captures.size === 6 && !workerReady) {
-    solveButton.textContent = pythonReady ? "Preparing solver…" : "Loading Python…";
-  } else if (solving) {
-    solveButton.textContent = "Solving…";
-  } else {
-    solveButton.textContent = "Solve cube";
-  }
+  if (captures.size === 6 && !workerReady) solveButton.textContent = pythonReady ? "Preparing…" : "Loading Python…";
+  else if (solving) solveButton.textContent = "Solving…";
+  else solveButton.textContent = `Solve ${cubeSize}×${cubeSize}×${cubeSize}`;
 }
 
 async function startCamera() {
-  if (!navigator.mediaDevices?.getUserMedia) throw new Error("This browser does not expose the camera API.");
+  if (!navigator.mediaDevices?.getUserMedia) throw new Error("Camera API unavailable.");
   if (stream) return;
   stream = await navigator.mediaDevices.getUserMedia({
     audio: false,
-    video: {
-      facingMode: { ideal: "environment" },
-      width: { ideal: 1920 },
-      height: { ideal: 1080 },
-    },
+    video: { facingMode: { ideal: "environment" }, width: { ideal: 1920 }, height: { ideal: 1080 } },
   });
   video.srcObject = stream;
   await video.play();
@@ -202,26 +185,29 @@ function rotateCanvas(source, quarters) {
 }
 
 function captureFace() {
-  if (!stream || captures.size >= 6 && !retakeFace) return;
+  if (!stream || (captures.size >= 6 && !retakeFace)) return;
   const step = currentStep();
   captures.set(step.face, cropFromVideo());
   captureRotations.set(step.face, 0);
   autoLatch = true;
   stableSince = 0;
   previousProbe = null;
-
-  if (retakeFace) {
-    retakeFace = null;
-  } else {
-    scanIndex += 1;
-  }
+  if (retakeFace) retakeFace = null;
+  else scanIndex += 1;
   renderReview();
   updateScanUI();
 }
 
 function renderReview() {
   reviewGrid.textContent = "";
-  for (const step of FACE_SEQUENCE) {
+  if (!captures.size) {
+    const p = document.createElement("p");
+    p.className = "review-empty";
+    p.textContent = "No captures yet.";
+    reviewGrid.appendChild(p);
+    return;
+  }
+  for (const step of faceSequence()) {
     const canvas = captures.get(step.face);
     if (!canvas) continue;
     const card = document.createElement("article");
@@ -231,11 +217,9 @@ function renderReview() {
     preview.height = 240;
     const shown = rotateCanvas(canvas, captureRotations.get(step.face) || 0);
     preview.getContext("2d").drawImage(shown, 0, 0, preview.width, preview.height);
-
     const header = document.createElement("div");
     header.className = "scan-card__head";
     header.innerHTML = `<strong>${step.short}</strong><span>${step.face}</span>`;
-
     const buttons = document.createElement("div");
     buttons.className = "scan-card__buttons";
     const rotate = document.createElement("button");
@@ -287,7 +271,6 @@ function stabilityLoop() {
     let variance = 0;
     for (const value of probe) variance += (value - mean) ** 2;
     variance = Math.sqrt(variance / probe.length);
-
     let motion = Infinity;
     if (previousProbe) {
       motion = 0;
@@ -295,13 +278,11 @@ function stabilityLoop() {
       motion /= probe.length;
     }
     previousProbe = probe;
-
     const stable = motion < 2.2 && variance > 10;
     if (stable) {
       if (!stableSince) stableSince = performance.now();
       const elapsed = performance.now() - stableSince;
-      const pct = Math.min(100, Math.round(elapsed / 9));
-      stabilityLabel.textContent = elapsed >= 900 ? "Steady" : `Hold steady ${pct}%`;
+      stabilityLabel.textContent = elapsed >= 900 ? "Steady" : "Hold steady";
       if (elapsed >= 900 && autoToggle.checked && !autoLatch && (captures.size < 6 || retakeFace)) {
         autoLatch = true;
         captureFace();
@@ -318,25 +299,15 @@ function stabilityLoop() {
 function splitTiles(faceCanvas, quarters = 0) {
   const source = rotateCanvas(faceCanvas, quarters);
   const tiles = [];
-  const cell = source.width / 3;
+  const cell = source.width / cubeSize;
   const inset = cell * 0.055;
-  for (let row = 0; row < 3; row += 1) {
-    for (let col = 0; col < 3; col += 1) {
+  for (let row = 0; row < cubeSize; row += 1) {
+    for (let col = 0; col < cubeSize; col += 1) {
       const tile = document.createElement("canvas");
       tile.width = TILE_SIZE;
       tile.height = TILE_SIZE;
       const ctx = tile.getContext("2d", { alpha: false, willReadFrequently: true });
-      ctx.drawImage(
-        source,
-        col * cell + inset,
-        row * cell + inset,
-        cell - 2 * inset,
-        cell - 2 * inset,
-        0,
-        0,
-        TILE_SIZE,
-        TILE_SIZE,
-      );
+      ctx.drawImage(source, col * cell + inset, row * cell + inset, cell - 2 * inset, cell - 2 * inset, 0, 0, TILE_SIZE, TILE_SIZE);
       tiles.push(tile);
     }
   }
@@ -346,9 +317,7 @@ function splitTiles(faceCanvas, quarters = 0) {
 function bytesToBase64(bytes) {
   let binary = "";
   const chunk = 0x8000;
-  for (let i = 0; i < bytes.length; i += chunk) {
-    binary += String.fromCharCode(...bytes.subarray(i, i + chunk));
-  }
+  for (let i = 0; i < bytes.length; i += chunk) binary += String.fromCharCode(...bytes.subarray(i, i + chunk));
   return btoa(binary);
 }
 
@@ -359,7 +328,8 @@ function preparePayload() {
     if (!capture) throw new Error(`Missing ${face} capture`);
     allTiles.push(...splitTiles(capture, captureRotations.get(face) || 0));
   }
-  const rgb = new Uint8Array(54 * TILE_SIZE * TILE_SIZE * 3);
+  const tileCount = 6 * cubeSize * cubeSize;
+  const rgb = new Uint8Array(tileCount * TILE_SIZE * TILE_SIZE * 3);
   let write = 0;
   for (const tile of allTiles) {
     const data = tile.getContext("2d", { willReadFrequently: true }).getImageData(0, 0, TILE_SIZE, TILE_SIZE).data;
@@ -369,7 +339,7 @@ function preparePayload() {
       rgb[write++] = data[p + 2];
     }
   }
-  return { payload: { tile_size: TILE_SIZE, rgb_b64: bytesToBase64(rgb) }, tiles: allTiles };
+  return { payload: { size: cubeSize, tile_size: TILE_SIZE, rgb_b64: bytesToBase64(rgb) }, tiles: allTiles };
 }
 
 async function solveCube() {
@@ -378,18 +348,22 @@ async function solveCube() {
   solution = null;
   resultPanel.hidden = true;
   updateSolveButton();
-  workerStatus.textContent = "Preparing captured tiles…";
+  workerStatus.textContent = "Solving…";
   const prepared = preparePayload();
   window.__lastTileCanvases = prepared.tiles;
   worker.postMessage({ type: "solve", payload: prepared.payload });
 }
 
 function moveInstruction(token) {
+  const clean = token.replace(/[2']/g, "");
+  const wide = clean.toLowerCase().includes("w");
+  const faceCode = clean[0]?.toUpperCase();
   const names = { U: "top", R: "right", F: "front", D: "bottom", L: "left", B: "back" };
-  const face = names[token[0]] || token[0];
-  if (token.endsWith("2")) return `Turn the ${face} face 180°.`;
-  if (token.endsWith("'")) return `Turn the ${face} face 90° anti-clockwise, looking directly at that face.`;
-  return `Turn the ${face} face 90° clockwise, looking directly at that face.`;
+  const face = names[faceCode] || faceCode;
+  const layer = wide ? `${face} two layers` : `${face} face`;
+  if (token.endsWith("2")) return `Turn the ${layer} 180°.`;
+  if (token.endsWith("'")) return `Turn the ${layer} 90° anti-clockwise.`;
+  return `Turn the ${layer} 90° clockwise.`;
 }
 
 function updateMoveUI() {
@@ -397,7 +371,7 @@ function updateMoveUI() {
   const moves = solution.moves || [];
   if (moveIndex >= moves.length) {
     moveText.textContent = "Solved ✓";
-    moveDetail.textContent = "The reconstructed picture cube is complete.";
+    moveDetail.textContent = "";
   } else {
     const token = moves[moveIndex];
     moveText.textContent = `${moveIndex + 1} / ${moves.length} · ${token}`;
@@ -414,27 +388,25 @@ async function showSolution(result) {
   moveIndex = 0;
   playing = false;
   resultPanel.hidden = false;
-  resultSummary.textContent = `${result.cubie_move_count} cubie moves${result.centre_move_count ? ` + ${result.centre_move_count} centre-alignment moves` : ""}`;
-  confidenceText.textContent = `Reconstruction confidence ${(result.confidence * 100).toFixed(0)}% · state ${result.state}`;
-
+  const count = result.move_count ?? result.cubie_move_count ?? (result.moves || []).length;
+  resultSummary.textContent = `${count} moves`;
+  confidenceText.textContent = Number.isFinite(result.confidence) ? `Confidence ${(result.confidence * 100).toFixed(0)}%` : "";
   if (!cubeView) cubeView = new CubeView(cubeContainer);
-  cubeView.build(window.__lastTileCanvases || preparePayload().tiles);
+  cubeView.build(window.__lastTileCanvases || preparePayload().tiles, cubeSize);
   updateMoveUI();
   resultPanel.scrollIntoView({ behavior: "smooth", block: "start" });
 }
 
 async function nextMove() {
   if (!solution || moveIndex >= solution.moves.length || cubeView.busy) return;
-  const token = solution.moves[moveIndex];
-  await cubeView.move(token);
+  await cubeView.move(solution.moves[moveIndex]);
   moveIndex += 1;
   updateMoveUI();
 }
 
 async function previousMove() {
   if (!solution || moveIndex <= 0 || cubeView.busy) return;
-  const token = solution.moves[moveIndex - 1];
-  await cubeView.inverseMove(token);
+  await cubeView.inverseMove(solution.moves[moveIndex - 1]);
   moveIndex -= 1;
   updateMoveUI();
 }
@@ -442,9 +414,7 @@ async function previousMove() {
 async function resetPlayback() {
   if (!solution || cubeView.busy) return;
   playing = false;
-  while (moveIndex > 0) {
-    await previousMove();
-  }
+  while (moveIndex > 0) await previousMove();
   updateMoveUI();
 }
 
@@ -463,11 +433,26 @@ async function togglePlay() {
 function showError(error) {
   console.error(error);
   resultPanel.hidden = false;
-  resultSummary.textContent = "Could not solve this scan";
-  moveText.textContent = "Retake unclear faces";
+  resultSummary.textContent = "Could not solve scan";
+  moveText.textContent = "Retake and try again";
   moveDetail.textContent = error instanceof Error ? error.message : String(error);
-  confidenceText.textContent = "No cube state was accepted.";
+  confidenceText.textContent = "";
   resultPanel.scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
+function resetScanForSize() {
+  cubeSize = Number(cubeSizeSelect.value);
+  scanIndex = 0;
+  retakeFace = null;
+  captures = new Map();
+  captureRotations = new Map();
+  solution = null;
+  moveIndex = 0;
+  playing = false;
+  resultPanel.hidden = true;
+  renderGuide();
+  renderReview();
+  updateScanUI();
 }
 
 startButton.addEventListener("click", () => startCamera().catch(showError));
@@ -477,9 +462,12 @@ prevButton.addEventListener("click", previousMove);
 nextButton.addEventListener("click", nextMove);
 playButton.addEventListener("click", togglePlay);
 resetButton.addEventListener("click", resetPlayback);
+cubeSizeSelect.addEventListener("change", resetScanForSize);
 
 window.addEventListener("pagehide", () => {
   for (const track of stream?.getTracks?.() || []) track.stop();
 });
 
+renderGuide();
+renderReview();
 updateScanUI();
