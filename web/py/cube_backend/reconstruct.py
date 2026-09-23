@@ -74,14 +74,6 @@ def _trim_bucket(bucket, keep: int):
 
 
 def _best_edges(scored: list[list[list[EdgeCandidate]]], keep: int = 1) -> dict[int, list[tuple[float, tuple[EdgeCandidate, ...]]]]:
-    """Return the best K legal edge assignments for each permutation parity.
-
-    The previous implementation retained exactly one partial path per DP state.
-    That is sufficient when edge-local evidence is decisive, but picture cubes
-    often have several ocean/sky edge hypotheses that only become distinguishable
-    after corners and the complete surface are considered. Keeping a compact
-    beam prevents those globally useful hypotheses from being discarded early.
-    """
     keep = max(1, int(keep))
     dp: dict[tuple[int, int, int], list[tuple[float, tuple[EdgeCandidate, ...]]]] = {(0, 0, 0): [(0.0, ())]}
     for p in range(12):
@@ -170,28 +162,36 @@ def _corner_score(bank: TileBank, candidate: CornerCandidate, placed_edges: dict
     return total
 
 
-def _best_corners(bank: TileBank, edge_assignment: tuple[EdgeCandidate, ...], required_parity: int) -> tuple[float, tuple[CornerCandidate, ...]] | None:
+def _best_corners(bank: TileBank, edge_assignment: tuple[EdgeCandidate, ...], required_parity: int, keep: int = 1) -> list[tuple[float, tuple[CornerCandidate, ...]]]:
+    """Keep several legal corner assignments so source evidence can decide globally."""
+    keep = max(1, int(keep))
     placed = _placed_edges(edge_assignment)
     scored = [[[] for _ in range(8)] for _ in range(8)]
     for p in range(8):
         for q in range(8):
             scored[p][q] = [CornerCandidate(c.current_pos, c.home_pos, c.co, c.placements, _corner_score(bank, c, placed)) for c in CORNER_GEOM[p][q]]
-    dp = {(0, 0, 0): (0.0, ())}
+    dp: dict[tuple[int, int, int], list[tuple[float, tuple[CornerCandidate, ...]]]] = {(0, 0, 0): [(0.0, ())]}
     for p in range(8):
-        nxt = {}
-        for (mask, twist, parity), (score, path) in dp.items():
-            for q in range(8):
-                if mask & (1 << q):
-                    continue
-                inv = _inversion_increment(mask, q, 8)
-                for cand in scored[p][q]:
-                    key = (mask | (1 << q), (twist + cand.co) % 3, parity ^ inv)
-                    value = (score + cand.score, path + (cand,))
-                    old = nxt.get(key)
-                    if old is None or value[0] > old[0]:
-                        nxt[key] = value
+        nxt: dict[tuple[int, int, int], list[tuple[float, tuple[CornerCandidate, ...]]]] = {}
+        for (mask, twist, parity), values in dp.items():
+            for score, path in values:
+                for q in range(8):
+                    if mask & (1 << q):
+                        continue
+                    inv = _inversion_increment(mask, q, 8)
+                    for cand in scored[p][q]:
+                        key = (mask | (1 << q), (twist + cand.co) % 3, parity ^ inv)
+                        bucket = nxt.setdefault(key, [])
+                        bucket.append((score + cand.score, path + (cand,)))
+                        if len(bucket) > keep * 3:
+                            _trim_bucket(bucket, keep)
+        for bucket in nxt.values():
+            if len(bucket) > keep:
+                _trim_bucket(bucket, keep)
         dp = nxt
-    return dp.get(((1 << 8) - 1, 0, required_parity))
+    values = dp.get(((1 << 8) - 1, 0, required_parity), [])
+    values.sort(key=lambda item: item[0], reverse=True)
+    return values[:keep]
 
 
 def _facelet_string(edges: tuple[EdgeCandidate, ...], corners: tuple[CornerCandidate, ...]) -> str:
@@ -223,60 +223,88 @@ def _target_placements(edges, corners, center_rots):
 
 
 def _global_picture_score(bank: TileBank, edges, corners, center_rots) -> float:
-    """Score the complete solved cube surface rather than independent phases."""
+    """Score the actual target picture first, with seams as secondary evidence."""
     placed = _target_placements(edges, corners, center_rots)
-    total = 0.0
-    for target, (tile, rot) in placed.items():
-        total += bank.placement_score(tile, rot, target)
+    source_weight = 4.8 if bank.has_reference else 1.0
+    seam_weight = 0.42 if bank.has_reference else 1.0
+    source_total = sum(bank.placement_score(tile, rot, target) for target, (tile, rot) in placed.items())
+    seam_total = 0.0
     neighbours = face_neighbours(3)
     for target, (tile, rot) in placed.items():
         for neighbour, side, neighbour_side in neighbours[target]:
             if neighbour <= target:
                 continue
             ntile, nrot = placed[neighbour]
-            total += bank.compatibility(tile, rot, side, ntile, nrot, neighbour_side)
-    return total
+            seam_total += bank.compatibility(tile, rot, side, ntile, nrot, neighbour_side)
+    return source_weight * source_total + seam_weight * seam_total
 
 
 def _reference_verification(bank: TileBank, edges, corners, center_rots):
     if not bank.has_reference:
         return None
     placed = _target_placements(edges, corners, center_rots)
-    percentiles = []
+    agreements = []
+    strong = 0
     for target, (tile, rot) in placed.items():
-        value = bank.placement_percentile(tile, rot, target)
-        if value is not None:
-            percentiles.append(value)
-    if not percentiles:
+        row = bank.placement_percentile(tile, rot, target)
+        col = bank.target_percentile(tile, rot, target)
+        if row is None or col is None:
+            continue
+        agreement = math.sqrt(max(0.0, row * col))
+        agreements.append(agreement)
+        if row >= 0.80 and col >= 0.80:
+            strong += 1
+    if not agreements:
         return None
-    agreement = sum(percentiles) / len(percentiles)
-    strong = sum(value >= 0.80 for value in percentiles) / len(percentiles)
-    # This is intentionally stricter than cube legality. A move sequence may
-    # solve the inferred colour state while the inferred picture itself is
-    # still poorly supported by the selected reference.
-    verified = agreement >= 0.72 and strong >= 0.44
+    agreement = sum(agreements) / len(agreements)
+    strong_fraction = strong / len(agreements)
+    verified = agreement >= 0.67 and strong_fraction >= 0.34
     return {
         "agreement": agreement,
-        "strong_fraction": strong,
+        "strong_fraction": strong_fraction,
         "verified": verified,
         "reference_fit": bank.reference_fit,
+        "reference_distinctiveness": bank.reference_distinctiveness,
     }
 
 
-def _confidence(chosen_score: float, alternatives: Iterable[float], borders: int = 108) -> float:
+def _confidence(chosen_score: float, alternatives: Iterable[float], verification=None, borders: int = 108) -> float:
     alts = sorted((x for x in alternatives if math.isfinite(x)), reverse=True)
-    if len(alts) < 2:
-        return 0.65
-    gap = max(0.0, alts[0] - alts[1])
-    return max(0.05, min(0.99, 0.55 + gap * 12.0 / max(1, borders)))
+    gap_confidence = 0.65
+    if len(alts) >= 2:
+        gap = max(0.0, alts[0] - alts[1])
+        gap_confidence = max(0.05, min(0.99, 0.55 + gap * 8.0 / max(1, borders)))
+    if isinstance(verification, dict):
+        picture = 0.68 * float(verification.get("agreement", 0.0)) + 0.32 * float(verification.get("strong_fraction", 0.0))
+        return max(0.05, min(0.99, 0.28 * gap_confidence + 0.72 * picture))
+    return gap_confidence
+
+
+def _serialize_candidate(item, bank: TileBank, all_scores) -> dict:
+    total_score, parity, edges, corners, center_rots, seed_parity, phase_score, state = item
+    verification = _reference_verification(bank, edges, corners, center_rots)
+    result = {
+        "state": state,
+        "center_rotations": list(center_rots),
+        "score": total_score,
+        "phase_score": phase_score,
+        "confidence": _confidence(total_score, all_scores, verification),
+        "edge_parity": parity,
+        "seed_parity": seed_parity,
+        "edges": [{"current": c.current_pos, "home": c.home_pos, "orientation": c.eo, "score": c.score} for c in edges],
+        "corners": [{"current": c.current_pos, "home": c.home_pos, "orientation": c.co, "score": c.score} for c in corners],
+    }
+    if verification is not None:
+        result["picture_verification"] = verification
+    return result
 
 
 def reconstruct(raw: bytes, tile_size: int) -> dict:
     bank = TileBank(raw, tile_size)
-    seed_keep = 3 if bank.has_reference else 2
-    edge_keep = 8 if bank.has_reference else 4
+    seed_keep = 4 if bank.has_reference else 2
+    edge_keep = 12 if bank.has_reference else 4
+    corner_keep = 6 if bank.has_reference else 2
     invariant_edges = _best_edges(_score_edge_matrix_rotation_invariant(bank), keep=seed_keep)
-    legal = []
     seen = {}
     for seed_parity, seed_values in invariant_edges.items():
         for _, seed_path in seed_values:
@@ -284,35 +312,26 @@ def reconstruct(raw: bytes, tile_size: int) -> dict:
             edge_by_parity = _best_edges(_score_edge_matrix(bank, center_rots), keep=edge_keep)
             for parity, edge_values in edge_by_parity.items():
                 for edge_score, edge_path in edge_values:
-                    corner = _best_corners(bank, edge_path, parity)
-                    if corner is None:
-                        continue
-                    corner_score, corner_path = corner
-                    state = _facelet_string(edge_path, corner_path)
-                    global_score = _global_picture_score(bank, edge_path, corner_path, center_rots)
-                    key = (state, center_rots)
-                    item = (global_score, parity, edge_path, corner_path, center_rots, seed_parity, edge_score + corner_score, state)
-                    old = seen.get(key)
-                    if old is None or global_score > old[0]:
-                        seen[key] = item
-    legal.extend(seen.values())
+                    corners = _best_corners(bank, edge_path, parity, keep=corner_keep)
+                    for corner_score, corner_path in corners:
+                        state = _facelet_string(edge_path, corner_path)
+                        global_score = _global_picture_score(bank, edge_path, corner_path, center_rots)
+                        key = (state, center_rots)
+                        item = (global_score, parity, edge_path, corner_path, center_rots, seed_parity, edge_score + corner_score, state)
+                        old = seen.get(key)
+                        if old is None or global_score > old[0]:
+                            seen[key] = item
+    legal = sorted(seen.values(), key=lambda x: x[0], reverse=True)
     if not legal:
         raise ValueError("Could not reconstruct a legal cube state. Retake blurry/glared faces and try again.")
-    legal.sort(key=lambda x: x[0], reverse=True)
-    total_score, parity, edges, corners, center_rots, seed_parity, phase_score, state = legal[0]
-    verification = _reference_verification(bank, edges, corners, center_rots)
-    result = {
-        "state": state,
-        "center_rotations": list(center_rots),
-        "score": total_score,
-        "phase_score": phase_score,
-        "confidence": _confidence(total_score, [x[0] for x in legal]),
-        "edge_parity": parity,
-        "seed_parity": seed_parity,
-        "hypotheses_considered": len(legal),
-        "edges": [{"current": c.current_pos, "home": c.home_pos, "orientation": c.eo, "score": c.score} for c in edges],
-        "corners": [{"current": c.current_pos, "home": c.home_pos, "orientation": c.co, "score": c.score} for c in corners],
-    }
-    if verification is not None:
-        result["picture_verification"] = verification
+
+    all_scores = [x[0] for x in legal]
+    result = _serialize_candidate(legal[0], bank, all_scores)
+    result["hypotheses_considered"] = len(legal)
+    # The backend can use move complexity as a tie-breaker among visually close
+    # legal reconstructions instead of blindly solving only the first one.
+    result["alternatives"] = [
+        _serialize_candidate(item, bank, all_scores)
+        for item in legal[1:8]
+    ]
     return result
