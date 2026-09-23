@@ -18,6 +18,14 @@ function status(stage, detail = "", progress = null) {
   postMessage({ type: "status", stage, detail, progress });
 }
 
+function friendlyErrorMessage(error) {
+  const raw = error instanceof Error ? error.message : String(error);
+  const lines = raw.split("\n").map((line) => line.trim()).filter(Boolean);
+  const finalLine = [...lines].reverse().find((line) => /^(ValueError|RuntimeError|Error):\s*/.test(line));
+  if (finalLine) return finalLine.replace(/^(ValueError|RuntimeError|Error):\s*/, "");
+  return lines.at(-1) || "Solve failed";
+}
+
 function syncFs(populate) {
   return new Promise((resolve, reject) => {
     pyodide.FS.syncfs(populate, (error) => error ? reject(error) : resolve());
@@ -194,7 +202,7 @@ async function runVisualEnsemble(payload) {
 
 async function loadBackendFiles() {
   const files = [
-    "__init__.py", "geometry.py", "vision.py", "reconstruct.py", "centres.py",
+    "__init__.py", "geometry.py", "vision.py", "reconstruct.py", "centres.py", "centre_fit.py",
     "generic.py", "surface.py", "pocket.py", "bigcube.py", "backend.py",
   ];
   pyodide.FS.mkdirTree("/app/cube_backend");
@@ -272,8 +280,6 @@ async function solve(payload) {
     }
   }
 
-  // This is intentional: never keep neural model sessions resident while
-  // Pyodide and solver tables are being allocated.
   destroyMlWorker();
   status("memory-release", "Released ML/GPU memory · loading solver…", 0.57);
   await initialisePython(size);
@@ -311,7 +317,7 @@ self.addEventListener("message", async (event) => {
     destroyMlWorker();
     postMessage({
       type: "error",
-      message: error instanceof Error ? error.message : String(error),
+      message: friendlyErrorMessage(error),
       stack: error instanceof Error ? error.stack : "",
     });
   }

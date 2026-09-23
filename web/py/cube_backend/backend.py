@@ -4,6 +4,7 @@ import base64
 import json
 
 from .centres import CUBE_ROTATIONS, centre_correction, centres_after_solution
+from .centre_fit import fit_reachable_centres
 from .geometry import FACE_INDEX, FACE_NAMES, FACE_NORMAL, FACE_RIGHT, FACE_UP, EDGE_GEOM, CORNER_GEOM
 from .reconstruct import reconstruct
 from .vision import set_visual_evidence
@@ -54,6 +55,14 @@ def _solve_3x3(raw: bytes, tile_size: int) -> dict:
     if not check.is_solved():
         raise RuntimeError("Solver returned a sequence that did not solve the reconstructed state")
 
+    # Centre rotations are visually ambiguous on picture cubes, especially on
+    # ocean-heavy artwork. The local reconstruction used to choose all six
+    # independently and only discover here that the resulting supercube state
+    # was impossible. Re-fit them against the selected edge geometry while
+    # enforcing the reachable centre subgroup after the cubie solution.
+    centre_fit = fit_reachable_centres(raw, tile_size, reconstruction, solution)
+    reconstruction["center_rotations"] = centre_fit["rotations"]
+
     remaining_centres = centres_after_solution(reconstruction["center_rotations"], solution)
     centre_algs = centre_correction(remaining_centres)
     centre_moves = " ".join(centre_algs).strip()
@@ -68,6 +77,11 @@ def _solve_3x3(raw: bytes, tile_size: int) -> dict:
         "cubie_move_count": len(solution.split()) if solution else 0,
         "centre_move_count": len(centre_moves.split()) if centre_moves else 0,
         "remaining_centres_before_correction": remaining_centres,
+        "centre_fit": {
+            "score": centre_fit["score"],
+            "adjusted_faces": centre_fit["adjusted_faces"],
+            "local_best": centre_fit["local_best"],
+        },
     }
 
 
