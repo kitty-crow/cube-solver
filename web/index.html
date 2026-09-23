@@ -73,10 +73,9 @@
         </div>
         <h2 id="scan-title">Scan front</h2>
         <p id="scan-instruction">Choose a front face and keep the cube upright.</p>
-        <div class="turn-cue" aria-hidden="true">
-          <div id="turn-cube-size" class="turn-cue__cube">3×3</div>
-          <div class="turn-cue__arrow">↻</div>
-          <span>Rotate the whole cube clockwise between side scans.</span>
+        <div class="scan-guide-wrap">
+          <p class="scan-guide-help">Not sure? Follow the animation below.</p>
+          <div id="scan-orientation-guide" class="scan-orientation-guide" aria-label="Animated 3D guide showing how to orient the cube for the next scan"></div>
         </div>
         <div class="scan-progress" aria-hidden="true"><span id="scan-progress"></span></div>
         <button id="solve-cube" class="pages-button pages-button--primary solve-button" type="button" disabled>Loading Python…</button>
@@ -115,5 +114,6 @@
   </footer>
   <!-- pages:body -->
   <script type="module" src="./app.js"></script>
+  <script type="module" src="./scan-guide.js"></script>
 </body>
 </html>
