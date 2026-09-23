@@ -70,7 +70,7 @@
       <aside class="scan-step pages-panel">
         <div class="scan-step__top">
           <span id="scan-counter" class="scan-counter">1 / 6</span>
-          <span id="worker-status" class="runtime-status">Loading Python…</span>
+          <span id="worker-status" class="runtime-status">Starting…</span>
         </div>
         <h2 id="scan-title">Scan front</h2>
         <p id="scan-instruction">Choose a front face and keep the cube upright.</p>
@@ -79,7 +79,16 @@
           <div id="scan-orientation-guide" class="scan-orientation-guide" aria-label="Animated 3D guide showing how to orient the cube for the next scan"></div>
         </div>
         <div class="scan-progress" aria-hidden="true"><span id="scan-progress"></span></div>
-        <button id="solve-cube" class="pages-button pages-button--primary solve-button" type="button" disabled>Loading Python…</button>
+        <div id="solve-progress-wrap" class="solve-progress-wrap" hidden>
+          <div class="solve-progress__meta">
+            <span id="solve-progress-label">Preparing…</span>
+            <span id="solve-progress-value">0%</span>
+          </div>
+          <div id="solve-progress-track" class="solve-progress" role="progressbar" aria-label="Solve progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+            <span id="solve-progress-bar"></span>
+          </div>
+        </div>
+        <button id="solve-cube" class="pages-button pages-button--primary solve-button" type="button" disabled>Starting…</button>
       </aside>
     </section>
 
