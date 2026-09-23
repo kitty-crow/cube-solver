@@ -6,9 +6,49 @@ from typing import Iterable
 from .geometry import (
     CENTER_FACELET, CORNER_FACELET, CORNER_GEOM, EDGE_FACELET, EDGE_GEOM,
     OPPOSITE_SIDE, CornerCandidate, EdgeCandidate, _local_of_facelet, _rc,
-    _side_between, FACE_INDEX, FACE_NAMES, CORNER_HOME, EDGE_HOME,
+    _side_between, FACE_INDEX, FACE_NAMES, FACE_NORMAL, FACE_RIGHT, FACE_UP,
+    CORNER_HOME, EDGE_HOME,
 )
 from .vision import TileBank
+
+
+def _neg(v):
+    return tuple(-x for x in v)
+
+
+def _side_toward(face: int, other_face: int) -> str:
+    target = FACE_NORMAL[other_face]
+    if target == FACE_UP[face]:
+        return "N"
+    if target == FACE_RIGHT[face]:
+        return "E"
+    if target == _neg(FACE_UP[face]):
+        return "S"
+    if target == _neg(FACE_RIGHT[face]):
+        return "W"
+    raise ValueError(f"Faces {FACE_NAMES[face]} and {FACE_NAMES[other_face]} are not adjacent")
+
+
+def _cross_face_score(bank: TileBank, placements) -> float:
+    """Continuity between stickers belonging to one physical cubie.
+
+    A picture cube can carry artwork continuously around a cube edge. Edges
+    have one such seam and corners have three. This evidence is deliberately
+    weighted below same-face seams so independent-face artwork remains valid.
+    """
+    total = 0.0
+    count = 0
+    for i, a in enumerate(placements):
+        for b in placements[i + 1:]:
+            try:
+                aside = _side_toward(a.target_face, b.target_face)
+                bside = _side_toward(b.target_face, a.target_face)
+            except ValueError:
+                continue
+            total += bank.compatibility(a.tile, a.rot, aside, b.tile, b.rot, bside)
+            count += 1
+    return 0.35 * total if count else 0.0
+
 
 def _edge_score(bank: TileBank, candidate: EdgeCandidate, center_rots: tuple[int, ...]) -> float:
     score = 0.0
@@ -19,7 +59,7 @@ def _edge_score(bank: TileBank, candidate: EdgeCandidate, center_rots: tuple[int
         side = _side_between(tile_cell, centre_cell)
         centre_tile = CENTER_FACELET[p.target_face]
         score += bank.compatibility(p.tile, p.rot, side, centre_tile, center_rots[p.target_face], OPPOSITE_SIDE[side])
-    return score
+    return score + _cross_face_score(bank, candidate.placements)
 
 
 def _score_edge_matrix(bank: TileBank, center_rots: tuple[int, ...]) -> list[list[list[EdgeCandidate]]]:
@@ -39,7 +79,6 @@ def _inversion_increment(mask: int, q: int, n: int) -> int:
 
 
 def _best_edges(scored: list[list[list[EdgeCandidate]]]) -> dict[int, tuple[float, tuple[EdgeCandidate, ...]]]:
-    # (mask, flipParity, permutationParity) -> (score, tuple(assignments))
     dp: dict[tuple[int, int, int], tuple[float, tuple[EdgeCandidate, ...]]] = {(0, 0, 0): (0.0, ())}
     for p in range(12):
         nxt: dict[tuple[int, int, int], tuple[float, tuple[EdgeCandidate, ...]]] = {}
@@ -65,17 +104,13 @@ def _best_edges(scored: list[list[list[EdgeCandidate]]]) -> dict[int, tuple[floa
 
 
 def _score_edge_matrix_rotation_invariant(bank: TileBank) -> list[list[list[EdgeCandidate]]]:
-    """Initial edge scores with each centre allowed its best local quarter-turn.
-
-    This avoids guessing centre orientation before we know which physical edges surround it.
-    A second pass fixes one common orientation per centre after the first global assignment.
-    """
+    """Initial edge scores with each centre allowed its best local quarter-turn."""
     out: list[list[list[EdgeCandidate]]] = [[[] for _ in range(12)] for _ in range(12)]
     for p in range(12):
         for q in range(12):
             scored = []
             for cand in EDGE_GEOM[p][q]:
-                score = 0.0
+                score = _cross_face_score(bank, cand.placements)
                 for placement in cand.placements:
                     r, c = _rc(_local_of_facelet(placement.target_facelet))
                     side = _side_between((r, c), (1, 1))
@@ -121,7 +156,7 @@ def _placed_edges(assignment: tuple[EdgeCandidate, ...]) -> dict[tuple[int, int,
 
 
 def _corner_score(bank: TileBank, candidate: CornerCandidate, placed_edges: dict[tuple[int, int, int], tuple[int, int]]) -> float:
-    total = 0.0
+    total = _cross_face_score(bank, candidate.placements)
     for p in candidate.placements:
         row, col = _rc(_local_of_facelet(p.target_facelet))
         for dr, dc, side in ((-1, 0, "N"), (0, 1, "E"), (1, 0, "S"), (0, -1, "W")):
@@ -144,7 +179,6 @@ def _best_corners(bank: TileBank, edge_assignment: tuple[EdgeCandidate, ...], re
                 for c in CORNER_GEOM[p][q]
             ]
 
-    # (mask, twist mod 3, permutation parity)
     dp: dict[tuple[int, int, int], tuple[float, tuple[CornerCandidate, ...]]] = {(0, 0, 0): (0.0, ())}
     for p in range(8):
         nxt: dict[tuple[int, int, int], tuple[float, tuple[CornerCandidate, ...]]] = {}
@@ -168,7 +202,6 @@ def _facelet_string(edges: tuple[EdgeCandidate, ...], corners: tuple[CornerCandi
     for f in range(6):
         out[CENTER_FACELET[f]] = FACE_NAMES[f]
     for cand in edges:
-        home_faces = tuple(FACE_INDEX[c] for c in EDGE_HOME[cand.home_pos])
         for current_slot, p in enumerate(cand.placements):
             out[EDGE_FACELET[cand.current_pos][current_slot]] = FACE_NAMES[p.target_face]
     for cand in corners:
@@ -184,22 +217,17 @@ def _confidence(chosen_score: float, alternatives: Iterable[float], borders: int
     if len(alts) < 2:
         return 0.65
     gap = max(0.0, alts[0] - alts[1])
-    # Border scores are negative errors. Convert the best-vs-next gap to a conservative 0..1 indicator.
     return max(0.05, min(0.99, 0.55 + gap * 12.0 / max(1, borders)))
 
 
 def reconstruct(raw: bytes, tile_size: int) -> dict:
     bank = TileBank(raw, tile_size)
 
-    # First reconstruct edges without committing to centre artwork orientation.
-    # Keep both permutation parities as independent seeds. A locally attractive seed can
-    # otherwise force the wrong quarter-turn on an ocean-heavy centre.
     invariant_edges = _best_edges(_score_edge_matrix_rotation_invariant(bank))
     legal = []
     for seed_parity, (_, seed_path) in invariant_edges.items():
         center_rots = _refine_center_rots(bank, seed_path, (0, 0, 0, 0, 0, 0))
 
-        # With one common orientation fixed for every centre, solve edges again.
         edge_by_parity = _best_edges(_score_edge_matrix(bank, center_rots))
         for parity, (edge_score, edge_path) in edge_by_parity.items():
             corner = _best_corners(bank, edge_path, parity)
