@@ -202,7 +202,14 @@ function bytesToBase64(bytes){let s="";for(let i=0;i<bytes.length;i+=0x8000)s+=S
 
 function buildEvidence(raw,tileSize,size,reference){const tileCount=6*size*size,states=tileCount*4,scan=new Array(states);for(let state=0;state<states;state++)scan[state]=stateDescriptor(raw,tileSize,state);const aligned=alignReference(scan,reference,size),scores=new Float32Array(states*tileCount),matrix=Array.from({length:tileCount},()=>new Float64Array(tileCount));for(let tile=0;tile<tileCount;tile++)for(let target=0;target<tileCount;target++){let best=0;for(let rot=0;rot<4;rot++){const state=tile*4+rot,s=similarity(scan[state],aligned[target]);scores[state*tileCount+target]=s;if(s>best)best=s;}matrix[tile][target]=best;}const fit=hungarianMax(matrix)/tileCount;return{version:1,states,targets:tileCount,absolute_f32_b64:bytesToBase64(new Uint8Array(scores.buffer)),fit};}
 
-async function facePreview(image){const res=112,c=new OffscreenCanvas(res,res),ctx=c.getContext("2d",{alpha:false});ctx.putImageData(image,0,0);const scaled=new OffscreenCanvas(res,res),sctx=scaled.getContext("2d",{alpha:false});sctx.drawImage(c,0,0,image.width,image.height,0,0,res,res);const blob=await scaled.convertToBlob({type:"image/jpeg",quality:.76}),bytes=new Uint8Array(await blob.arrayBuffer());return `data:image/jpeg;base64,${bytesToBase64(bytes)}`;}
+async function facePreview(image){
+  const source=new OffscreenCanvas(image.width,image.height),sourceCtx=source.getContext("2d",{alpha:false});
+  sourceCtx.putImageData(image,0,0);
+  const res=112,scaled=new OffscreenCanvas(res,res),sctx=scaled.getContext("2d",{alpha:false});
+  sctx.drawImage(source,0,0,image.width,image.height,0,0,res,res);
+  const blob=await scaled.convertToBlob({type:"image/jpeg",quality:.76}),bytes=new Uint8Array(await blob.arrayBuffer());
+  return `data:image/jpeg;base64,${bytesToBase64(bytes)}`;
+}
 
 async function scoreCandidate(candidate,raw,tileSize,size){
   try{const image=await imageDataFromUrl(candidate.thumbnailUrl),net=detectCubeNet(image);let faces=null,layout="";
