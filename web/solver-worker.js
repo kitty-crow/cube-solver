@@ -20,7 +20,10 @@ function status(stage, detail = "") {
 }
 
 async function loadBackendFiles() {
-  const files = ["__init__.py", "geometry.py", "vision.py", "reconstruct.py", "centres.py", "backend.py"];
+  const files = [
+    "__init__.py", "geometry.py", "vision.py", "reconstruct.py", "centres.py",
+    "generic.py", "pocket.py", "bigcube.py", "backend.py",
+  ];
   pyodide.FS.mkdirTree("/app/cube_backend");
   for (const file of files) {
     const url = new URL(`./py/cube_backend/${file}`, self.location.href);
@@ -34,21 +37,17 @@ async function loadBackendFiles() {
 async function initialise() {
   if (readyPromise) return readyPromise;
   readyPromise = (async () => {
-    status("runtime", "Loading Python runtime…");
+    status("runtime", "Loading Python…");
     importScripts(`${PYODIDE_BASE}pyodide.js`);
     pyodide = await loadPyodide({ indexURL: PYODIDE_BASE });
 
-    status("packages", "Loading NumPy and package installer…");
+    status("packages", "Loading packages…");
     await pyodide.loadPackage(["numpy", "micropip"]);
-
-    status("packages", "Installing the pure-Python two-phase cube solver…");
     await pyodide.runPythonAsync(`
 import micropip
 await micropip.install("rubik-solver-py==0.1.1")
 `);
 
-    // Persist generated Kociemba tables in IndexedDB so returning visitors do not
-    // rebuild them every time the page is opened. Failure is non-fatal.
     try {
       pyodide.FS.mkdirTree("/solver-cache");
       pyodide.FS.mount(pyodide.FS.filesystems.IDBFS, {}, "/solver-cache");
@@ -61,17 +60,16 @@ os.environ["RUBIK_SOLVER_CACHE_DIR"] = "/solver-cache/rubik_solver"
       console.warn("Persistent solver cache unavailable", error);
     }
 
-    status("backend", "Loading picture reconstruction backend…");
     await loadBackendFiles();
     pyodide.runPython("import cube_backend");
     postMessage({ type: "python-ready", version: PYODIDE_VERSION });
 
-    status("tables", "Preparing Kociemba lookup tables in the background…");
+    status("tables", "Preparing 3×3 tables…");
     await pyodide.runPythonAsync("cube_backend.warm_solver()");
     try { await syncFs(false); } catch (error) { console.warn("Could not persist solver cache", error); }
     solverReady = true;
     postMessage({ type: "solver-ready" });
-    status("ready", "Python solver ready");
+    status("ready", "Ready");
   })();
   return readyPromise;
 }
@@ -79,17 +77,16 @@ os.environ["RUBIK_SOLVER_CACHE_DIR"] = "/solver-cache/rubik_solver"
 async function solve(payload) {
   await initialise();
   if (!solverReady) {
-    status("tables", "Waiting for solver lookup tables…");
     await pyodide.runPythonAsync("cube_backend.warm_solver()");
     solverReady = true;
   }
-  status("reconstruct", "Matching picture pieces and enforcing cube legality…");
+  status("reconstruct", `Solving ${payload.size || 3}×${payload.size || 3}×${payload.size || 3}…`);
   const payloadJson = JSON.stringify(payload);
   pyodide.globals.set("_scan_payload_json", payloadJson);
   const resultJson = await pyodide.runPythonAsync("cube_backend.solve_scan(_scan_payload_json)");
   const result = JSON.parse(String(resultJson));
   postMessage({ type: "solution", result });
-  status("ready", "Solution ready");
+  status("ready", "Ready");
 }
 
 self.addEventListener("message", async (event) => {

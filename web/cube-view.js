@@ -3,40 +3,32 @@ import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 
 const FACE_NAMES = ["U", "R", "F", "D", "L", "B"];
 const NORMAL = {
-  U: new THREE.Vector3(0, 1, 0),
-  R: new THREE.Vector3(1, 0, 0),
-  F: new THREE.Vector3(0, 0, 1),
-  D: new THREE.Vector3(0, -1, 0),
-  L: new THREE.Vector3(-1, 0, 0),
-  B: new THREE.Vector3(0, 0, -1),
+  U: new THREE.Vector3(0, 1, 0), R: new THREE.Vector3(1, 0, 0), F: new THREE.Vector3(0, 0, 1),
+  D: new THREE.Vector3(0, -1, 0), L: new THREE.Vector3(-1, 0, 0), B: new THREE.Vector3(0, 0, -1),
 };
 const RIGHT = {
-  U: new THREE.Vector3(1, 0, 0),
-  R: new THREE.Vector3(0, 0, -1),
-  F: new THREE.Vector3(1, 0, 0),
-  D: new THREE.Vector3(1, 0, 0),
-  L: new THREE.Vector3(0, 0, 1),
-  B: new THREE.Vector3(-1, 0, 0),
+  U: new THREE.Vector3(1, 0, 0), R: new THREE.Vector3(0, 0, -1), F: new THREE.Vector3(1, 0, 0),
+  D: new THREE.Vector3(1, 0, 0), L: new THREE.Vector3(0, 0, 1), B: new THREE.Vector3(-1, 0, 0),
 };
 const UP = {
-  U: new THREE.Vector3(0, 0, -1),
-  R: new THREE.Vector3(0, 1, 0),
-  F: new THREE.Vector3(0, 1, 0),
-  D: new THREE.Vector3(0, 0, 1),
-  L: new THREE.Vector3(0, 1, 0),
-  B: new THREE.Vector3(0, 1, 0),
+  U: new THREE.Vector3(0, 0, -1), R: new THREE.Vector3(0, 1, 0), F: new THREE.Vector3(0, 1, 0),
+  D: new THREE.Vector3(0, 0, 1), L: new THREE.Vector3(0, 1, 0), B: new THREE.Vector3(0, 1, 0),
 };
 
 function parseMove(token) {
-  const face = token[0];
-  let turns = 1;
-  if (token.endsWith("2")) turns = 2;
-  else if (token.endsWith("'")) turns = -1;
-  return { face, turns };
+  const match = String(token).trim().match(/^(\d+)?([URFDLB])([wW]?)(2|'?)$/);
+  if (!match) throw new Error(`Unsupported move: ${token}`);
+  const [, prefix, face, wide, suffix] = match;
+  const layers = wide ? Number(prefix || 2) : 1;
+  const turns = suffix === "2" ? 2 : suffix === "'" ? -1 : 1;
+  return { face, layers, turns };
 }
 
-function easeInOut(t) {
-  return t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2;
+function easeInOut(t) { return t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2; }
+function coordKey(x, y, z) { return `${x.toFixed(3)},${y.toFixed(3)},${z.toFixed(3)}`; }
+function snapCoord(value, size) {
+  const centre = (size - 1) / 2;
+  return Math.round(value + centre) - centre;
 }
 
 export class CubeView {
@@ -44,7 +36,6 @@ export class CubeView {
     this.container = container;
     this.scene = new THREE.Scene();
     this.camera = new THREE.PerspectiveCamera(36, 1, 0.1, 100);
-    this.camera.position.set(5.7, 4.8, 6.8);
     this.renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
@@ -52,21 +43,18 @@ export class CubeView {
     this.controls = new OrbitControls(this.camera, this.renderer.domElement);
     this.controls.enableDamping = true;
     this.controls.target.set(0, 0, 0);
-    this.controls.minDistance = 4.5;
-    this.controls.maxDistance = 12;
     this.root = new THREE.Group();
     this.scene.add(this.root);
     this.cubelets = [];
     this.busy = false;
+    this.size = 3;
     this._resizeObserver = new ResizeObserver(() => this.resize());
     this._resizeObserver.observe(this.container);
 
-    const hemi = new THREE.HemisphereLight(0xffffff, 0x718078, 2.2);
-    this.scene.add(hemi);
+    this.scene.add(new THREE.HemisphereLight(0xffffff, 0x718078, 2.2));
     const key = new THREE.DirectionalLight(0xffffff, 1.4);
     key.position.set(4, 7, 8);
     this.scene.add(key);
-
     this.resize();
     this.animateLoop();
   }
@@ -95,64 +83,72 @@ export class CubeView {
     while (this.root.children.length) {
       const child = this.root.children.pop();
       child?.traverse((obj) => {
-        if (obj.geometry) obj.geometry.dispose?.();
-        if (obj.material) {
-          const materials = Array.isArray(obj.material) ? obj.material : [obj.material];
-          for (const m of materials) {
-            m.map?.dispose?.();
-            m.dispose?.();
-          }
+        obj.geometry?.dispose?.();
+        const materials = obj.material ? (Array.isArray(obj.material) ? obj.material : [obj.material]) : [];
+        for (const material of materials) {
+          material.map?.dispose?.();
+          material.dispose?.();
         }
       });
     }
     this.cubelets = [];
   }
 
-  build(tileCanvases) {
+  build(tileCanvases, size = 3) {
     this.clear();
+    this.size = size;
+    const centre = (size - 1) / 2;
+    const distance = Math.max(5.2, size * 2.35);
+    this.camera.position.set(distance * 0.82, distance * 0.68, distance);
+    this.controls.minDistance = size * 1.45;
+    this.controls.maxDistance = size * 4.2;
+
     const boxGeometry = new THREE.BoxGeometry(0.94, 0.94, 0.94);
     const black = new THREE.MeshStandardMaterial({ color: 0x101312, roughness: 0.68, metalness: 0.05 });
     const cubeletByKey = new Map();
 
-    for (let x = -1; x <= 1; x += 1) {
-      for (let y = -1; y <= 1; y += 1) {
-        for (let z = -1; z <= 1; z += 1) {
+    for (let xi = 0; xi < size; xi += 1) {
+      for (let yi = 0; yi < size; yi += 1) {
+        for (let zi = 0; zi < size; zi += 1) {
+          const x = xi - centre;
+          const y = yi - centre;
+          const z = zi - centre;
           const group = new THREE.Group();
           group.position.set(x, y, z);
-          group.userData.logical = new THREE.Vector3(x, y, z);
           const mesh = new THREE.Mesh(boxGeometry.clone(), black.clone());
           group.add(mesh);
           this.root.add(group);
           this.cubelets.push(group);
-          cubeletByKey.set(`${x},${y},${z}`, group);
+          cubeletByKey.set(coordKey(x, y, z), group);
         }
       }
     }
 
     for (let f = 0; f < 6; f += 1) {
       const face = FACE_NAMES[f];
-      const n = NORMAL[face];
+      const normal = NORMAL[face];
       const right = RIGHT[face];
       const up = UP[face];
-      for (let local = 0; local < 9; local += 1) {
-        const row = Math.floor(local / 3);
-        const col = local % 3;
-        const pos = n.clone().add(right.clone().multiplyScalar(col - 1)).add(up.clone().multiplyScalar(1 - row));
-        const key = `${Math.round(pos.x)},${Math.round(pos.y)},${Math.round(pos.z)}`;
-        const cubelet = cubeletByKey.get(key);
+      for (let local = 0; local < size * size; local += 1) {
+        const row = Math.floor(local / size);
+        const col = local % size;
+        const pos = normal.clone().multiplyScalar(centre)
+          .add(right.clone().multiplyScalar(col - centre))
+          .add(up.clone().multiplyScalar(centre - row));
+        const cubelet = cubeletByKey.get(coordKey(pos.x, pos.y, pos.z));
         if (!cubelet) continue;
-
-        const canvas = tileCanvases[f * 9 + local];
+        const canvas = tileCanvases[f * size * size + local];
         const texture = new THREE.CanvasTexture(canvas);
         texture.colorSpace = THREE.SRGBColorSpace;
         texture.minFilter = THREE.LinearFilter;
         texture.magFilter = THREE.LinearFilter;
-        const material = new THREE.MeshBasicMaterial({ map: texture, side: THREE.DoubleSide });
-        const sticker = new THREE.Mesh(new THREE.PlaneGeometry(0.86, 0.86), material);
-        sticker.position.copy(n.clone().multiplyScalar(0.481));
-
+        const sticker = new THREE.Mesh(
+          new THREE.PlaneGeometry(0.86, 0.86),
+          new THREE.MeshBasicMaterial({ map: texture, side: THREE.DoubleSide }),
+        );
+        sticker.position.copy(normal.clone().multiplyScalar(0.481));
         const basis = new THREE.Matrix4();
-        basis.makeBasis(right, up, n);
+        basis.makeBasis(right, up, normal);
         sticker.quaternion.setFromRotationMatrix(basis);
         cubelet.add(sticker);
       }
@@ -163,12 +159,14 @@ export class CubeView {
     if (this.busy || !token) return;
     this.busy = true;
     try {
-      const { face, turns } = parseMove(token);
+      const { face, layers, turns } = parseMove(token);
+      if (layers > this.size) throw new Error(`Move ${token} exceeds ${this.size}×${this.size}`);
       const axis = NORMAL[face];
-      if (!axis) return;
+      const centre = (this.size - 1) / 2;
+      const cutoff = centre - layers + 0.5;
       const pivot = new THREE.Group();
       this.root.add(pivot);
-      const selected = this.cubelets.filter((cubelet) => cubelet.position.dot(axis) > 0.5);
+      const selected = this.cubelets.filter((cubelet) => cubelet.position.dot(axis) > cutoff);
       for (const cubelet of selected) pivot.attach(cubelet);
 
       const angle = -turns * Math.PI / 2;
@@ -188,11 +186,10 @@ export class CubeView {
       for (const cubelet of selected) {
         this.root.attach(cubelet);
         cubelet.position.set(
-          Math.round(cubelet.position.x),
-          Math.round(cubelet.position.y),
-          Math.round(cubelet.position.z),
+          snapCoord(cubelet.position.x, this.size),
+          snapCoord(cubelet.position.y, this.size),
+          snapCoord(cubelet.position.z, this.size),
         );
-        // Snap quaternion to quarter turns to prevent numerical drift.
         const e = new THREE.Euler().setFromQuaternion(cubelet.quaternion, "XYZ");
         const q = Math.PI / 2;
         e.set(Math.round(e.x / q) * q, Math.round(e.y / q) * q, Math.round(e.z / q) * q);
