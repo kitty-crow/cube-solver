@@ -28,6 +28,15 @@ def warm_solver() -> str:
 
 def _solve_3x3(raw: bytes, tile_size: int) -> dict:
     reconstruction = reconstruct(raw, tile_size)
+    picture_verification = reconstruction.get("picture_verification")
+    if isinstance(picture_verification, dict):
+        reference_fit = float(picture_verification.get("reference_fit", 0.0) or 0.0)
+        verified = bool(picture_verification.get("verified"))
+        if reference_fit >= 0.65 and not verified:
+            raise ValueError(
+                "The cube state is mechanically legal, but the final picture does not match the selected reference closely enough. "
+                "Try another reference or retake the ambiguous faces."
+            )
 
     from rubik_solver import Cube, solve
     if not _SOLVER_READY:
