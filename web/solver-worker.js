@@ -6,8 +6,9 @@
 const PYODIDE_VERSION = "0.29.5";
 const PYODIDE_BASE = `https://cdn.jsdelivr.net/pyodide/v${PYODIDE_VERSION}/full/`;
 const RUNTIME_DB = "picture-cube-solver-runtime";
-const RUNTIME_DB_VERSION = 1;
+const RUNTIME_DB_VERSION = 2;
 const EVIDENCE_STORE = "evidence";
+const REFERENCE_STORE = "reference";
 let pyodide = null;
 let readyPromise = null;
 let solverTablesReady = false;
@@ -67,27 +68,39 @@ function openRuntimeDb() {
     request.onupgradeneeded = () => {
       const db = request.result;
       if (!db.objectStoreNames.contains(EVIDENCE_STORE)) db.createObjectStore(EVIDENCE_STORE, { keyPath: "key" });
+      if (!db.objectStoreNames.contains(REFERENCE_STORE)) db.createObjectStore(REFERENCE_STORE, { keyPath: "key" });
     };
     request.onsuccess = () => resolve(request.result);
     request.onerror = () => reject(request.error || new Error("Could not open runtime storage"));
   });
 }
 
-async function loadEvidenceCheckpoint(key) {
+async function loadStoreRecord(storeName, key) {
   let db;
   try {
     db = await openRuntimeDb();
-    const transaction = db.transaction(EVIDENCE_STORE, "readonly");
+    if (!db.objectStoreNames.contains(storeName)) return null;
+    const transaction = db.transaction(storeName, "readonly");
     return await new Promise((resolve, reject) => {
-      const request = transaction.objectStore(EVIDENCE_STORE).get(key);
+      const request = transaction.objectStore(storeName).get(key);
       request.onsuccess = () => resolve(request.result || null);
-      request.onerror = () => reject(request.error || new Error("Could not read visual checkpoint"));
+      request.onerror = () => reject(request.error || new Error(`Could not read ${storeName}`));
     });
   } catch (_) {
     return null;
   } finally {
     db?.close?.();
   }
+}
+
+async function loadEvidenceCheckpoint(key) {
+  return loadStoreRecord(EVIDENCE_STORE, key);
+}
+
+async function loadReferenceEvidence(size) {
+  const record = await loadStoreRecord(REFERENCE_STORE, "current");
+  if (!record?.evidence || Number(record.size) !== Number(size)) return null;
+  return record.evidence;
 }
 
 async function saveEvidenceCheckpoint(key, evidence) {
@@ -121,20 +134,22 @@ async function saveEvidenceCheckpoint(key, evidence) {
   }
 }
 
-function evidenceForPython(evidence) {
-  if (!evidence) return null;
-  const scores = evidence.scores instanceof Float32Array
-    ? evidence.scores
-    : new Float32Array(evidence.scores);
-  const bytes = new Uint8Array(scores.buffer, scores.byteOffset, scores.byteLength);
-  return {
+function evidenceForPython(evidence, referenceEvidence) {
+  if (!evidence && !referenceEvidence) return null;
+  const out = {
     version: 1,
-    states: evidence.states,
-    seam_f32_b64: bytesToBase64(bytes),
-    models: evidence.models || {},
-    capabilities: evidence.capabilities || {},
-    memory_plan: evidence.memoryPlan || {},
+    states: Number(evidence?.states || referenceEvidence?.states || 0),
   };
+  if (evidence) {
+    const scores = evidence.scores instanceof Float32Array ? evidence.scores : new Float32Array(evidence.scores);
+    const bytes = new Uint8Array(scores.buffer, scores.byteOffset, scores.byteLength);
+    out.seam_f32_b64 = bytesToBase64(bytes);
+    out.models = evidence.models || {};
+    out.capabilities = evidence.capabilities || {};
+    out.memory_plan = evidence.memoryPlan || {};
+  }
+  if (referenceEvidence) out.reference_evidence = referenceEvidence;
+  return out;
 }
 
 function destroyMlWorker() {
@@ -285,7 +300,9 @@ async function solve(payload) {
   await initialisePython(size);
 
   if (!evidence) evidence = await loadEvidenceCheckpoint(fingerprint);
-  payload.visual_evidence = evidenceForPython(evidence);
+  const referenceEvidence = await loadReferenceEvidence(size);
+  if (referenceEvidence) status("reference", `Using reference for ${referenceEvidence.subject || "recognised artwork"}…`, 0.84);
+  payload.visual_evidence = evidenceForPython(evidence, referenceEvidence);
   evidence = null;
 
   status("reconstruct", `Reconstructing ${size}×${size}×${size} picture cube…`, 0.87);
