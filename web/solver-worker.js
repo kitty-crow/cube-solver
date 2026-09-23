@@ -100,7 +100,12 @@ async function loadEvidenceCheckpoint(key) {
 async function loadReferenceEvidence(size) {
   const record = await loadStoreRecord(REFERENCE_STORE, "current");
   if (!record?.evidence || Number(record.size) !== Number(size)) return null;
-  return record.evidence;
+  const evidence = record.evidence;
+  // v0.5 reference matching added calibrated distinctiveness. Reject older
+  // persisted matrices so a reload cannot silently reuse the previous raw
+  // similarity score where many ocean/sky destinations all looked ~98% good.
+  if (!Number.isFinite(Number(evidence.raw_fit)) || !Number.isFinite(Number(evidence.distinctiveness))) return null;
+  return evidence;
 }
 
 async function saveEvidenceCheckpoint(key, evidence) {
