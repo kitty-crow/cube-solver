@@ -1,15 +1,26 @@
 from __future__ import annotations
 
+from array import array
+import base64
 import math
+import sys
 from functools import lru_cache
 
 from .geometry import SIDES
 
+_SIDE_INDEX = {"N": 0, "E": 1, "S": 2, "W": 3}
+_ACTIVE_EVIDENCE = None
+
+
+def set_visual_evidence(evidence) -> None:
+    global _ACTIVE_EVIDENCE
+    _ACTIVE_EVIDENCE = evidence
+
 
 class TileBank:
-    """Compact, rotation-aware border descriptors for captured stickers."""
+    """Rotation-aware sticker descriptors with optional ensemble seam evidence."""
 
-    def __init__(self, raw: bytes, size: int, tile_count: int = 54):
+    def __init__(self, raw: bytes, size: int, tile_count: int = 54, evidence=None):
         expected = tile_count * size * size * 3
         if len(raw) != expected:
             raise ValueError(f"Expected {expected} RGB bytes, got {len(raw)}")
@@ -17,10 +28,34 @@ class TileBank:
         self.size = size
         self.tile_count = tile_count
         self._profiles: dict[tuple[int, int, str], tuple[tuple[float, float, float, float], ...]] = {}
+        self._states = tile_count * 4
+        self._external = self._decode_evidence(_ACTIVE_EVIDENCE if evidence is None else evidence)
         for tile in range(tile_count):
             for rot in range(4):
                 for side in SIDES:
                     self._profiles[(tile, rot, side)] = self._make_profile(tile, rot, side)
+
+    def _decode_evidence(self, evidence):
+        if not isinstance(evidence, dict):
+            return None
+        if int(evidence.get("version", 0)) != 1:
+            return None
+        if int(evidence.get("states", 0)) != self._states:
+            return None
+        encoded = evidence.get("seam_f32_b64")
+        if not isinstance(encoded, str) or not encoded:
+            return None
+        try:
+            values = array("f")
+            values.frombytes(base64.b64decode(encoded))
+            if sys.byteorder != "little":
+                values.byteswap()
+        except Exception:
+            return None
+        expected = 4 * self._states * self._states
+        if len(values) != expected:
+            return None
+        return values
 
     def _rgb_rot(self, tile: int, x: int, y: int, rot: int) -> tuple[int, int, int]:
         n = self.size
@@ -65,6 +100,21 @@ class TileBank:
             out.append((r / total, g / total, b / total, lum))
         return tuple(out)
 
+    def external_compatibility(self, a: int, ar: int, aside: str, b: int, br: int, bside: str) -> float | None:
+        if self._external is None:
+            return None
+        if aside not in _SIDE_INDEX or bside not in _SIDE_INDEX:
+            return None
+        astate = a * 4 + (ar % 4)
+        bstate = b * 4 + (br % 4)
+        n = self._states
+        direct = self._external[_SIDE_INDEX[aside] * n * n + astate * n + bstate]
+        reverse = self._external[_SIDE_INDEX[bside] * n * n + bstate * n + astate]
+        values = [float(x) for x in (direct, reverse) if math.isfinite(float(x)) and float(x) >= 0.0]
+        if not values:
+            return None
+        return max(0.0, min(1.0, sum(values) / len(values)))
+
     @lru_cache(maxsize=262144)
     def compatibility(self, a: int, ar: int, aside: str, b: int, br: int, bside: str) -> float:
         pa = self._profiles[(a, ar % 4, aside)]
@@ -76,4 +126,10 @@ class TileBank:
             err += 2.2 * ((x[0] - y[0]) ** 2 + (x[1] - y[1]) ** 2 + (x[2] - y[2]) ** 2)
             err += 0.8 * (((x[3] - ma) - (y[3] - mb)) ** 2)
         mse = err / len(pa)
-        return -math.sqrt(max(mse, 1e-12))
+        base = -math.sqrt(max(mse, 1e-12))
+        learned = self.external_compatibility(a, ar, aside, b, br, bside)
+        if learned is None:
+            return base
+        # The deterministic border metric remains the anchor. Ensemble evidence
+        # can strongly break visually ambiguous ties without overriding geometry.
+        return base + 0.10 * (2.0 * learned - 1.0)

@@ -1,79 +1,100 @@
 # Picture Cube Solver
 
-A browser-native 3×3 picture-cube solver for cubes where the stickers form a map, photograph or other continuous artwork instead of six flat colours.
+Browser-native solver for conventional 2×2×2, 3×3×3 and 4×4×4 picture cubes whose stickers form continuous artwork rather than six flat colours.
 
-The application is built around **live camera capture**. It does not ship with, depend on, or compare against the development photographs that were used during the original Earth-cube proof of concept.
+The application uses live camera capture. Camera imagery stays in the browser and is not uploaded to an application server.
 
-## Live scan flow
+## Scan flow
 
-The browser guides the user through six captures:
+The browser guides six captures in a fixed camera-relative orientation:
 
-1. choose any side as the front and scan it;
-2. rotate the whole cube 90° clockwise as viewed from above and scan the next side;
-3. rotate clockwise again and scan the back;
-4. rotate clockwise once more and scan the fourth side;
-5. return to the original front, tilt the cube towards the camera, and scan the top with the original front edge at the bottom of the frame;
-6. return again and scan the bottom with the original front edge at the top of the frame.
+1. choose any side as Front;
+2. rotate the whole cube 90° clockwise from above for Right;
+3. rotate clockwise again for Back;
+4. rotate clockwise again for Left;
+5. return to the original Front, then tilt Top towards the camera;
+6. return to the original Front, then tilt Bottom towards the camera.
 
-The review screen allows each capture to be rotated in 90° increments or retaken without restarting the other five faces. A stability detector can auto-capture after the cube is held still, while the manual capture button remains available.
+A looping Three.js guide uses already captured faces as textures and solid grey for unknown faces so the required whole-cube movement can be copied directly.
 
-## Recognition model
+## Visual reconstruction
 
-There is deliberately no Earth-specific classifier and no hard-coded solved image. The Python backend treats the picture as a constrained jigsaw whose pieces happen to be attached to Rubik cubies.
+The scan labels are camera-relative. Reconstruction decides where physical cubies belong in the solved picture.
 
-For every captured sticker it builds exposure-resistant border descriptors. It then:
+The visual stack is deliberately hybrid:
 
-- groups stickers into the 12 physical edge cubies and 8 physical corner cubies from their current positions;
-- enumerates every rigidly valid destination and orientation for each cubie;
-- scores how well transformed sticker borders continue into the fixed centre artwork;
-- reconstructs all edges with a dynamic-programming one-to-one assignment while enforcing total edge-flip parity;
-- infers one shared quarter-turn orientation for each centre and resolves the edges again;
-- reconstructs corners against the already placed edge borders while enforcing total corner twist and matching edge/corner permutation parity;
-- rejects any interpretation that cannot be a legal 3×3 state.
+- deterministic multi-depth colour and luminance profiles;
+- tangent and normal image gradients;
+- edge and texture continuity;
+- wrapped continuity across all 12 physical cube edges, not only within flat faces;
+- an adaptive learned ensemble for ambiguous seams;
+- legal Rubik cubie geometry as a hard constraint.
 
-The in-plane rotation of every sticker is calculated from a proper 3D rotation matrix. The matcher therefore compares the artwork in the orientation it would physically have in the candidate solved position rather than pretending picture stickers behave like plain colours.
+The learned stage can use DINOv2, SuperPoint/LightGlue, EfficientLoFTR, XFeat and RoMaV2 evidence when the browser and hardware can support them. Models are staged rather than evaluated exhaustively against every possible pair. Cheap deterministic scoring eliminates most candidates first, DINO features add regional context, and heavier matchers are used on the lowest-margin seams. If a model cannot load or execute, reconstruction continues with the remaining evidence.
 
-This is particularly useful for ocean-heavy Earth cubes. A nearly featureless blue sticker is allowed to remain ambiguous until the rest of the image and the cube's physical constraints force a consistent assignment.
+The neural layer never directly outputs a cube state. It produces seam-likelihood evidence. Python then searches for the best globally consistent physical arrangement subject to cubie type, orientation, permutation and parity constraints.
+
+## Automatic acceleration
+
+There are no acceleration query flags. Runtime capability detection chooses the available hardware automatically.
+
+```text
+camera tiles
+    │
+    ├── WebGPU, when available
+    ├── WebGL2 compatibility path
+    ├── ONNX Runtime Web WASM fallback
+    └── CPU Web Worker pool for parallel seam scoring
+              │
+              ▼
+      seam-likelihood tensor
+              │
+              ▼
+       Pyodide reconstruction
+              │
+              ▼
+       legal cube-state solver
+```
+
+GPU work and CPU threading are independent. A machine with an integrated GPU and multiple CPU cores can use both at the same time. GitHub Pages does not guarantee cross-origin isolation, so WASM pthreads are not assumed; ordinary dedicated Web Workers provide the portable parallel CPU path.
+
+## Size-specific solving
+
+### 2×2×2
+
+Reconstruction assigns the eight physical corners and enforces legal corner orientation. A dedicated pocket-cube search produces the solution.
+
+### 3×3×3
+
+Edges and corners are reconstructed under flip, twist and permutation parity constraints. Fixed centre artwork orientation is retained and corrected after the ordinary cubie solve with legal supercube centre algorithms.
+
+### 4×4×4
+
+Reconstruction treats all 96 picture stickers as exact physical identities. The solver handles corners, exact wings, movable centres and even-cube parity. Tests replay the returned algorithm against 96 unique facelet IDs so a merely colour-solved but picture-wrong result cannot pass.
 
 ## Browser architecture
 
-The deployed site is static GitHub Pages, but the computational backend is Python running in a dedicated Web Worker:
-
 ```text
-Camera + capture UI (JavaScript)
-          │
-          ▼
-Web Worker
-          │
-          ▼
-Pyodide 0.29.5 (Python/WASM)
-          │
-          ├── picture-border reconstruction
-          ├── 3D cubie-orientation geometry
-          ├── Rubik legality constraints
-          └── rubik-solver-py two-phase solver
-          │
-          ▼
-move sequence + picture-centre correction
-          │
-          ▼
-Three.js 3D copy using the captured sticker textures
+Camera + scan guide
+        │
+        ▼
+solver worker
+        ├── adaptive ML worker
+        │     ├── WebGPU / WebGL / WASM model execution
+        │     └── threaded deterministic seam workers
+        │
+        └── Pyodide 0.29.5
+              ├── global picture reconstruction
+              ├── 3D cubie geometry
+              ├── legality/parity constraints
+              └── cube solvers
+        │
+        ▼
+move sequence
+        │
+        ▼
+Three.js playback using captured sticker textures
 ```
-
-The worker starts while the camera workflow is in progress. Kociemba move/pruning tables are built off the UI thread and persisted in IndexedDB where the browser permits it, so later visits can reuse them.
-
-Camera frames remain in the current browser tab. There is no image upload endpoint or application server.
-
-## Centre orientation
-
-A normal 3×3 solver ignores the rotation of fixed centres. Picture cubes cannot. The reconstruction records how many clockwise quarter-turns each captured centre would need to match the solved artwork, tracks the effect of the ordinary solve on those centres, then appends standard supercube centre algorithms.
-
-The correction generator uses two legal operations:
-
-- rotate one centre 180° while leaving the solved cubies intact;
-- rotate one centre +90° and an adjacent centre -90° while leaving the solved cubies intact.
-
-A small breadth-first search chooses a sequence of these operations for the remaining reachable centre-orientation state.
 
 ## Development
 
@@ -87,30 +108,29 @@ bun run build
 bun run audit:mobile
 ```
 
-`bun run check` also runs deterministic Python reconstruction tests. The tests synthesise continuous six-face artwork, scramble the virtual physical cube in 3D, rotate every sticker exactly as the corresponding cubie would rotate, and verify that the image reconstruction recovers both the cubie state and centre orientations.
-
-Serve `site/` over HTTP or HTTPS to test the camera. Browser camera APIs do not work from an ordinary `file://` URL.
+`bun run check` validates JavaScript and Python syntax and runs deterministic reconstruction, generic NxN geometry, exact 4×4 replay, wrapped-surface and ensemble-evidence tests.
 
 ## Deployment
 
-Pushes to `main` run `.github/workflows/pages.yml`. The workflow checks JavaScript and Python syntax, runs the reconstruction tests, builds through the pinned Pages template, runs the template's mobile-responsiveness audit, and deploys the generated `site/` artefact to GitHub Pages.
-
-Expected URL:
+Pushes to `main` run `.github/workflows/pages.yml`, build the static site, run the mobile-responsiveness audit and deploy to GitHub Pages.
 
 `https://kitty-crow.github.io/cube-solver/`
 
 ## Runtime dependencies
 
 - Pyodide 0.29.5
-- `rubik-solver-py` 0.1.1, MIT, installed inside Pyodide
+- `rubik-solver-py` 0.1.1
 - Three.js 0.180.0
-- `github-pages-template`, pinned git submodule
+- ONNX Runtime Web, loaded lazily for learned visual evidence
+- pretrained visual models loaded lazily only when required
 
-## Limitations
+## Current limitations
 
-The camera capture currently uses a fixed square guide rather than automatic perspective-corner detection, so the photographed face should be held reasonably square to the camera. Strong glare, motion blur, a cube that occupies only a small part of the guide, or artwork that is genuinely identical across complete cubies can reduce reconstruction confidence.
+The camera still uses a fixed square crop rather than full perspective-corner rectification. Strong glare, motion blur and very small cube images can reduce evidence quality. Learned models are optional accelerators/evidence sources, so browser support, memory limits, CORS or model-provider availability can reduce the ensemble without disabling the deterministic solver.
 
-The scanner is for a conventional 3×3 mechanism with fixed centres. It is not intended for 2×2, 4×4, mirror cubes, bandaged cubes, or puzzles with movable centres.
+RoMaV2 browser exports are substantially larger than the other models and are therefore reserved for hardware that passes the high-memory WebGPU gate. The smaller XFeat path remains available on ordinary hardware.
+
+Mirror cubes, bandaged cubes and non-standard mechanisms are out of scope.
 
 ## Licence
 
