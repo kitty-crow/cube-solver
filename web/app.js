@@ -1,9 +1,13 @@
 import { CubeView } from "./cube-view.js";
 import { clearScan, loadScan, saveScan } from "./scan-store.js";
+import { buildPayloadFromCaptures, cloneCanvas, rotateCanvas } from "./scan-geometry.js";
 
 const FACE_ORDER = ["U", "R", "F", "D", "L", "B"];
 const TILE_SIZE = 48;
 const CAPTURE_SIZE = 768;
+const RUNTIME_DB = "picture-cube-solver-runtime";
+const RUNTIME_DB_VERSION = 2;
+const ROUNDED_SETTING = "picture-cube-rounded-cubies";
 
 const $ = (selector) => document.querySelector(selector);
 const video = $("#camera");
@@ -11,8 +15,10 @@ const captureCanvas = $("#capture-canvas");
 const cameraStage = document.querySelector(".camera-stage");
 const probeCanvas = $("#probe-canvas");
 const startButton = $("#start-camera");
+const stopButton = $("#stop-camera");
 const captureButton = $("#capture-face");
-const autoToggle = $("#auto-capture");
+const roundedToggle = $("#rounded-cubies");
+const clearImageMemoryButton = $("#clear-image-memory");
 const solveButton = $("#solve-cube");
 const cubeSizeSelect = $("#cube-size");
 const faceGuide = $("#face-guide");
@@ -51,12 +57,13 @@ let pythonReady = false;
 let solving = false;
 let previousProbe = null;
 let stableSince = 0;
-let autoLatch = false;
 let solution = null;
 let moveIndex = 0;
 let playing = false;
 let cubeView = null;
 let scanSaveChain = Promise.resolve();
+
+if (roundedToggle) roundedToggle.checked = localStorage.getItem(ROUNDED_SETTING) === "1";
 
 function faceSequence() {
   const n = `${cubeSize}×${cubeSize}`;
@@ -97,6 +104,38 @@ function persistCurrentScan() {
     .then(() => saveScan(size, captureSnapshot, rotationSnapshot))
     .catch((error) => console.warn("Could not persist scan", error));
   return scanSaveChain;
+}
+
+function openRuntimeDb() {
+  return new Promise((resolve, reject) => {
+    if (!globalThis.indexedDB) return resolve(null);
+    const request = indexedDB.open(RUNTIME_DB, RUNTIME_DB_VERSION);
+    request.onupgradeneeded = () => {
+      const db = request.result;
+      if (!db.objectStoreNames.contains("evidence")) db.createObjectStore("evidence", { keyPath: "key" });
+      if (!db.objectStoreNames.contains("reference")) db.createObjectStore("reference", { keyPath: "key" });
+    };
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error || new Error("Could not open runtime image storage"));
+  });
+}
+
+async function clearRuntimeAnalysis() {
+  const db = await openRuntimeDb();
+  if (!db) return;
+  try {
+    const names = ["evidence", "reference"].filter((name) => db.objectStoreNames.contains(name));
+    if (!names.length) return;
+    const tx = db.transaction(names, "readwrite");
+    for (const name of names) tx.objectStore(name).clear();
+    await new Promise((resolve, reject) => {
+      tx.oncomplete = resolve;
+      tx.onerror = () => reject(tx.error || new Error("Could not clear runtime image storage"));
+      tx.onabort = () => reject(tx.error || new Error("Could not clear runtime image storage"));
+    });
+  } finally {
+    db.close();
+  }
 }
 
 const worker = new Worker(new URL("./solver-worker.js", import.meta.url));
@@ -184,6 +223,7 @@ async function startCamera() {
   video.srcObject = stream;
   await video.play();
   startButton.hidden = true;
+  if (stopButton) stopButton.hidden = false;
   cameraStage?.classList.add("camera-stage--live");
   captureButton.disabled = false;
   updateScanUI();
@@ -195,8 +235,12 @@ function stopCamera() {
   stream = null;
   video.srcObject = null;
   startButton.hidden = false;
+  if (stopButton) stopButton.hidden = true;
   cameraStage?.classList.remove("camera-stage--live");
   captureButton.disabled = true;
+  previousProbe = null;
+  stableSince = 0;
+  if (captures.size < 6) stabilityLabel.textContent = "Camera off";
 }
 
 function cropFromVideo() {
@@ -213,33 +257,11 @@ function cropFromVideo() {
   return cloneCanvas(captureCanvas);
 }
 
-function cloneCanvas(source) {
-  const canvas = document.createElement("canvas");
-  canvas.width = source.width;
-  canvas.height = source.height;
-  canvas.getContext("2d", { alpha: false }).drawImage(source, 0, 0);
-  return canvas;
-}
-
-function rotateCanvas(source, quarters) {
-  const q = ((quarters % 4) + 4) % 4;
-  if (q === 0) return cloneCanvas(source);
-  const canvas = document.createElement("canvas");
-  canvas.width = source.width;
-  canvas.height = source.height;
-  const ctx = canvas.getContext("2d", { alpha: false });
-  ctx.translate(canvas.width / 2, canvas.height / 2);
-  ctx.rotate(q * Math.PI / 2);
-  ctx.drawImage(source, -source.width / 2, -source.height / 2);
-  return canvas;
-}
-
 function captureFace() {
   if (!stream || (captures.size >= 6 && !retakeFace)) return;
   const step = currentStep();
   captures.set(step.face, cropFromVideo());
   captureRotations.set(step.face, 0);
-  autoLatch = true;
   stableSince = 0;
   previousProbe = null;
   if (retakeFace) retakeFace = null;
@@ -335,63 +357,22 @@ function stabilityLoop() {
       if (!stableSince) stableSince = performance.now();
       const elapsed = performance.now() - stableSince;
       stabilityLabel.textContent = elapsed >= 900 ? "Steady" : "Hold steady";
-      if (elapsed >= 900 && autoToggle.checked && !autoLatch && (captures.size < 6 || retakeFace)) {
-        autoLatch = true;
-        captureFace();
-      }
     } else {
       stableSince = 0;
-      autoLatch = false;
       stabilityLabel.textContent = variance <= 10 ? "Place cube in guide" : "Hold steady";
     }
   }
   requestAnimationFrame(stabilityLoop);
 }
 
-function splitTiles(faceCanvas, quarters = 0) {
-  const source = rotateCanvas(faceCanvas, quarters);
-  const tiles = [];
-  const cell = source.width / cubeSize;
-  const inset = cell * 0.055;
-  for (let row = 0; row < cubeSize; row += 1) {
-    for (let col = 0; col < cubeSize; col += 1) {
-      const tile = document.createElement("canvas");
-      tile.width = TILE_SIZE;
-      tile.height = TILE_SIZE;
-      const ctx = tile.getContext("2d", { alpha: false, willReadFrequently: true });
-      ctx.drawImage(source, col * cell + inset, row * cell + inset, cell - 2 * inset, cell - 2 * inset, 0, 0, TILE_SIZE, TILE_SIZE);
-      tiles.push(tile);
-    }
-  }
-  return tiles;
-}
-
-function bytesToBase64(bytes) {
-  let binary = "";
-  const chunk = 0x8000;
-  for (let i = 0; i < bytes.length; i += chunk) binary += String.fromCharCode(...bytes.subarray(i, i + chunk));
-  return btoa(binary);
-}
-
 function preparePayload() {
-  const allTiles = [];
-  for (const face of FACE_ORDER) {
-    const capture = captures.get(face);
-    if (!capture) throw new Error(`Missing ${face} capture`);
-    allTiles.push(...splitTiles(capture, captureRotations.get(face) || 0));
-  }
-  const tileCount = 6 * cubeSize * cubeSize;
-  const rgb = new Uint8Array(tileCount * TILE_SIZE * TILE_SIZE * 3);
-  let write = 0;
-  for (const tile of allTiles) {
-    const data = tile.getContext("2d", { willReadFrequently: true }).getImageData(0, 0, TILE_SIZE, TILE_SIZE).data;
-    for (let p = 0; p < data.length; p += 4) {
-      rgb[write++] = data[p];
-      rgb[write++] = data[p + 1];
-      rgb[write++] = data[p + 2];
-    }
-  }
-  return { payload: { size: cubeSize, tile_size: TILE_SIZE, rgb_b64: bytesToBase64(rgb) }, tiles: allTiles };
+  return buildPayloadFromCaptures(
+    captures,
+    captureRotations,
+    cubeSize,
+    TILE_SIZE,
+    Boolean(roundedToggle?.checked),
+  );
 }
 
 async function solveCube() {
@@ -401,7 +382,7 @@ async function solveCube() {
   resultPanel.hidden = true;
   setSolveProgress(0.01, "Preparing scan…");
   updateSolveButton();
-  workerStatus.textContent = "Preparing solve…";
+  workerStatus.textContent = roundedToggle?.checked ? "Rectifying rounded cubies…" : "Preparing solve…";
   await persistCurrentScan();
   const prepared = preparePayload();
   window.__lastTileCanvases = prepared.tiles;
@@ -504,12 +485,42 @@ function resetScanForSize() {
   solution = null;
   moveIndex = 0;
   playing = false;
+  window.__lastTileCanvases = null;
   resultPanel.hidden = true;
   hideSolveProgress();
   clearScan().catch((error) => console.warn("Could not clear saved scan", error));
+  clearRuntimeAnalysis().catch((error) => console.warn("Could not clear visual analysis", error));
   renderGuide();
   renderReview();
   updateScanUI();
+}
+
+async function clearImageMemory() {
+  if (solving) return;
+  stopCamera();
+  clearImageMemoryButton.disabled = true;
+  workerStatus.textContent = "Clearing image memory…";
+  try {
+    await Promise.allSettled([clearScan(), clearRuntimeAnalysis()]);
+    captures = new Map();
+    captureRotations = new Map();
+    scanIndex = 0;
+    retakeFace = null;
+    solution = null;
+    moveIndex = 0;
+    playing = false;
+    window.__lastTileCanvases = null;
+    resultPanel.hidden = true;
+    hideSolveProgress();
+    renderReview();
+    updateScanUI();
+    window.pictureReference?.invalidate?.();
+    window.dispatchEvent(new CustomEvent("picture-image-memory-cleared"));
+    stabilityLabel.textContent = "Images cleared";
+    workerStatus.textContent = "Image memory cleared";
+  } finally {
+    clearImageMemoryButton.disabled = false;
+  }
 }
 
 async function restoreSavedScan() {
@@ -534,13 +545,23 @@ async function restoreSavedScan() {
 }
 
 startButton.addEventListener("click", () => startCamera().catch(showError));
+stopButton?.addEventListener("click", stopCamera);
 captureButton.addEventListener("click", captureFace);
+clearImageMemoryButton?.addEventListener("click", () => clearImageMemory().catch(showError));
 solveButton.addEventListener("click", () => solveCube().catch(showError));
 prevButton.addEventListener("click", previousMove);
 nextButton.addEventListener("click", nextMove);
 playButton.addEventListener("click", togglePlay);
 resetButton.addEventListener("click", resetPlayback);
 cubeSizeSelect.addEventListener("change", resetScanForSize);
+roundedToggle?.addEventListener("change", () => {
+  localStorage.setItem(ROUNDED_SETTING, roundedToggle.checked ? "1" : "0");
+  window.__lastTileCanvases = null;
+  clearRuntimeAnalysis().catch((error) => console.warn("Could not invalidate visual analysis", error));
+  window.pictureReference?.invalidate?.();
+  window.dispatchEvent(new CustomEvent("picture-scan-geometry-changed"));
+  workerStatus.textContent = roundedToggle.checked ? "Rounded-cubie rectification enabled" : "Square grid extraction enabled";
+});
 
 window.addEventListener("pagehide", () => stopCamera());
 
