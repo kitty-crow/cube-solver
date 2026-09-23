@@ -24,7 +24,7 @@ function requestResult(request) {
 
 function canvasBlob(canvas) {
   return new Promise((resolve, reject) => {
-    canvas.toBlob((blob) => blob ? resolve(blob) : reject(new Error("Could not encode captured face")), "image/webp", 0.94);
+    canvas.toBlob((blob) => blob ? resolve(blob) : reject(new Error("Could not encode captured face")), "image/png");
   });
 }
 
