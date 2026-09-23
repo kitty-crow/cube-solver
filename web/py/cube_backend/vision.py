@@ -102,7 +102,8 @@ class TileBank:
             variance = sum((value - mean) ** 2 for value in row) / n
             std = math.sqrt(max(variance, 1e-12))
             ordered = sorted(row)
-            median = ordered[n // 2]
+            middle = n // 2
+            median = ordered[middle] if n % 2 else 0.5 * (ordered[middle - 1] + ordered[middle])
             best = ordered[-1]
             # Generic references often make every ocean/sky tile score around
             # 0.95. Such a row is not useful absolute-position evidence even
