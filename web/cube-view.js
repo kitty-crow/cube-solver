@@ -3,6 +3,7 @@ import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { RoundedBoxGeometry } from "three/addons/geometries/RoundedBoxGeometry.js";
 
 const FACE_NAMES = ["U", "R", "F", "D", "L", "B"];
+const ROUNDED_SETTING = "picture-cube-rounded-cubies";
 const NORMAL = {
   U: new THREE.Vector3(0, 1, 0), R: new THREE.Vector3(1, 0, 0), F: new THREE.Vector3(0, 0, 1),
   D: new THREE.Vector3(0, -1, 0), L: new THREE.Vector3(-1, 0, 0), B: new THREE.Vector3(0, 0, -1),
@@ -125,10 +126,11 @@ export class CubeView {
     this.cubelets = [];
   }
 
-  build(tileCanvases, size = 3, { rounded = false } = {}) {
+  build(tileCanvases, size = 3, options = {}) {
     this.clear();
     this.size = size;
-    this.rounded = Boolean(rounded);
+    const storedRounded = globalThis.localStorage?.getItem?.(ROUNDED_SETTING) === "1";
+    this.rounded = Boolean(options.rounded ?? storedRounded);
     const centre = (size - 1) / 2;
     const distance = Math.max(5.2, size * 2.35);
     this.camera.position.set(distance * 0.82, distance * 0.68, distance);
