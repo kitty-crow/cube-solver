@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "check": "bun vendor/pages/src/cli.ts check pages.config.ts && node --check web/app.js && node --check web/cube-view.js && node --check web/solver-worker.js && python3 -m py_compile web/py/cube_backend/*.py && python3 -m unittest discover -s tests -p 'test_*.py'",
+    "check": "bun vendor/pages/src/cli.ts check pages.config.ts && node --check web/app.js && node --check web/cube-view.js && node --check web/scan-guide.js && node --check web/solver-worker.js && python3 -m py_compile web/py/cube_backend/*.py && python3 -m unittest discover -s tests -p 'test_*.py'",
     "build": "bun vendor/pages/src/cli.ts build pages.config.ts",
     "audit:mobile": "bun vendor/pages/src/cli.ts audit-mobile site"
   },
