@@ -7,6 +7,9 @@ export default definePages({
     { from: "index.html", route: "/" },
     { from: "404.html", route: "/404.html", keepSource: true }
   ],
+  copy: [
+    { from: "version.json", to: "version.json" }
+  ],
   css: {
     files: [
       "tokens.css",
