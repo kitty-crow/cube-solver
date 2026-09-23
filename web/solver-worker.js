@@ -22,7 +22,7 @@ function status(stage, detail = "") {
 async function loadBackendFiles() {
   const files = [
     "__init__.py", "geometry.py", "vision.py", "reconstruct.py", "centres.py",
-    "generic.py", "pocket.py", "bigcube.py", "backend.py",
+    "generic.py", "surface.py", "pocket.py", "bigcube.py", "backend.py",
   ];
   pyodide.FS.mkdirTree("/app/cube_backend");
   for (const file of files) {
