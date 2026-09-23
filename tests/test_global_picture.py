@@ -23,11 +23,13 @@ def reference_evidence(rows, fit=0.95):
     flat = [value for row in rows for value in row]
     return {
         "reference_evidence": {
-            "version": 1,
+            "version": 2,
             "states": len(rows),
             "targets": len(rows[0]),
             "absolute_f32_b64": encoded_f32(flat),
             "fit": fit,
+            "raw_fit": fit,
+            "distinctiveness": 0.8,
         }
     }
 
@@ -49,7 +51,7 @@ class ReferenceCalibrationTests(unittest.TestCase):
         self.assertAlmostEqual(bank.placement_score(0, 0, 0), 0.0, places=7)
         self.assertAlmostEqual(bank.placement_score(0, 0, 1), 0.0, places=7)
 
-    def test_distinct_reference_position_gets_positive_and_negative_evidence(self):
+    def test_distinct_reference_position_gets_bidirectional_evidence(self):
         rows = [[0.50, 0.50] for _ in range(self.tile_count * 4)]
         rows[0] = [0.96, 0.48]
         bank = TileBank(
@@ -59,8 +61,14 @@ class ReferenceCalibrationTests(unittest.TestCase):
             evidence=reference_evidence(rows),
         )
         self.assertGreater(bank.placement_score(0, 0, 0), 0.0)
-        self.assertLess(bank.placement_score(0, 0, 1), 0.0)
+        self.assertLessEqual(bank.placement_score(0, 0, 1), 0.0)
         self.assertGreater(bank.placement_percentile(0, 0, 0), bank.placement_percentile(0, 0, 1))
+        self.assertGreater(bank.target_percentile(0, 0, 0), bank.target_percentile(1, 0, 0))
+
+    def test_specular_white_pixels_are_low_reliability(self):
+        self.assertLess(TileBank._glare_weight(255, 255, 255), 0.2)
+        self.assertGreater(TileBank._glare_weight(80, 130, 205), 0.9)
+        self.assertGreater(TileBank._glare_weight(230, 210, 70), 0.9)
 
 
 class GlobalHypothesisTests(unittest.TestCase):

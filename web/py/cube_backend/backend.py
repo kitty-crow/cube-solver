@@ -3,7 +3,7 @@ from __future__ import annotations
 import base64
 import json
 
-from .centres import CUBE_ROTATIONS, centre_correction, centres_after_solution
+from .centres import CUBE_ROTATIONS, centre_correction, centres_after_solution, simplify_moves
 from .centre_fit import fit_reachable_centres
 from .geometry import FACE_INDEX, FACE_NAMES, FACE_NORMAL, FACE_RIGHT, FACE_UP, EDGE_GEOM, CORNER_GEOM
 from .reconstruct import reconstruct
@@ -26,21 +26,17 @@ def warm_solver() -> str:
     return "ready"
 
 
-def _solve_3x3(raw: bytes, tile_size: int) -> dict:
-    reconstruction = reconstruct(raw, tile_size)
-    picture_verification = reconstruction.get("picture_verification")
-    if isinstance(picture_verification, dict):
-        reference_fit = float(picture_verification.get("reference_fit", 0.0) or 0.0)
-        verified = bool(picture_verification.get("verified"))
-        if reference_fit >= 0.65 and not verified:
-            raise ValueError(
-                "The cube state is mechanically legal, but the final picture does not match the selected reference closely enough. "
-                "Try another reference or retake the ambiguous faces."
-            )
+def _picture_quality(reconstruction: dict) -> float | None:
+    verification = reconstruction.get("picture_verification")
+    if not isinstance(verification, dict):
+        return None
+    agreement = float(verification.get("agreement", 0.0) or 0.0)
+    strong = float(verification.get("strong_fraction", 0.0) or 0.0)
+    return 0.72 * agreement + 0.28 * strong
 
+
+def _solve_reconstruction_candidate(raw: bytes, tile_size: int, reconstruction: dict) -> dict:
     from rubik_solver import Cube, solve
-    if not _SOLVER_READY:
-        warm_solver()
 
     cube = Cube.from_string(reconstruction["state"])
     valid = cube.verify()
@@ -61,28 +57,82 @@ def _solve_3x3(raw: bytes, tile_size: int) -> dict:
         raise RuntimeError("Solver returned a sequence that did not solve the reconstructed state")
 
     centre_fit = fit_reachable_centres(raw, tile_size, reconstruction, solution)
-    reconstruction["center_rotations"] = centre_fit["rotations"]
-
+    reconstruction = {**reconstruction, "center_rotations": centre_fit["rotations"]}
     remaining_centres = centres_after_solution(reconstruction["center_rotations"], solution)
     centre_algs = centre_correction(remaining_centres)
-    centre_moves = " ".join(centre_algs).strip()
-    full_solution = " ".join(x for x in (solution, centre_moves) if x).strip()
+    centre_tokens = simplify_moves(" ".join(centre_algs))
+    full_tokens = simplify_moves(solution.split() + centre_tokens)
 
     return {
         **reconstruction,
         "solution": solution,
-        "centre_solution": centre_moves,
-        "moves": full_solution.split() if full_solution else [],
-        "move_count": len(full_solution.split()) if full_solution else 0,
+        "centre_solution": " ".join(centre_tokens),
+        "moves": full_tokens,
+        "move_count": len(full_tokens),
         "cubie_move_count": len(solution.split()) if solution else 0,
-        "centre_move_count": len(centre_moves.split()) if centre_moves else 0,
+        "centre_move_count": len(centre_tokens),
         "remaining_centres_before_correction": remaining_centres,
         "centre_fit": {
             "score": centre_fit["score"],
             "adjusted_faces": centre_fit["adjusted_faces"],
             "local_best": centre_fit["local_best"],
         },
+        "picture_quality": _picture_quality(reconstruction),
     }
+
+
+def _solve_3x3(raw: bytes, tile_size: int) -> dict:
+    reconstruction = reconstruct(raw, tile_size)
+    alternatives = reconstruction.pop("alternatives", [])
+
+    if not _SOLVER_READY:
+        warm_solver()
+
+    candidates = [reconstruction] + list(alternatives[:7])
+    solved = []
+    for index, candidate in enumerate(candidates):
+        try:
+            solved_candidate = _solve_reconstruction_candidate(raw, tile_size, candidate)
+            solved_candidate["hypothesis_index"] = index
+            solved.append(solved_candidate)
+        except Exception:
+            # A lower-ranked visual hypothesis can still fail legality/solver
+            # checks independently; keep evaluating the remaining hypotheses.
+            continue
+
+    if not solved:
+        raise RuntimeError("No visually plausible legal reconstruction produced a valid solution")
+
+    with_reference = any(isinstance(item.get("picture_verification"), dict) for item in solved)
+    if with_reference:
+        best_picture = max(float(item.get("picture_quality") or 0.0) for item in solved)
+        # Move count is evidence, not the primary objective. Only let it decide
+        # between hypotheses whose source-image agreement is essentially tied.
+        near = [
+            item for item in solved
+            if float(item.get("picture_quality") or 0.0) >= best_picture - 0.035
+        ]
+        selected = min(
+            near,
+            key=lambda item: (
+                int(item.get("move_count", 10_000)),
+                int(item.get("cubie_move_count", 10_000)),
+                -float(item.get("score", 0.0)),
+            ),
+        )
+        if not any(bool((item.get("picture_verification") or {}).get("verified")) for item in solved):
+            raise ValueError(
+                "The mechanically legal hypotheses still do not reproduce the selected source image closely enough. "
+                "Try a different source reference or retake the most reflective face."
+            )
+        selected["selection_reason"] = "source match first; shorter move sequence used only among visually near-equal legal hypotheses"
+    else:
+        selected = solved[0]
+        selected["selection_reason"] = "continuity-only reconstruction"
+
+    selected["hypotheses_solved"] = len(solved)
+    selected["hypothesis_move_counts"] = [int(item.get("move_count", 0)) for item in solved]
+    return selected
 
 
 def _patch_bigcube_semantic_scoring(bigcube) -> None:
@@ -115,6 +165,9 @@ def _reference_summary(evidence) -> dict | None:
     return {
         "subject": reference.get("subject"),
         "fit": reference.get("fit"),
+        "raw_fit": reference.get("raw_fit"),
+        "distinctiveness": reference.get("distinctiveness"),
+        "glare_fraction": reference.get("glare_fraction"),
         "title": source.get("title"),
         "source_url": source.get("source_url"),
         "layout": source.get("layout"),

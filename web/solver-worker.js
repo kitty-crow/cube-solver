@@ -9,6 +9,8 @@ const RUNTIME_DB = "picture-cube-solver-runtime";
 const RUNTIME_DB_VERSION = 2;
 const EVIDENCE_STORE = "evidence";
 const REFERENCE_STORE = "reference";
+const VISUAL_EVIDENCE_VERSION = 2;
+const REFERENCE_EVIDENCE_VERSION = 2;
 let pyodide = null;
 let readyPromise = null;
 let solverTablesReady = false;
@@ -48,7 +50,7 @@ function bytesToBase64(bytes) {
 }
 
 function scanFingerprint(payload) {
-  const text = `${payload.size || 3}:${payload.tile_size || 0}:${payload.rgb_b64 || ""}`;
+  const text = `${VISUAL_EVIDENCE_VERSION}:${payload.size || 3}:${payload.tile_size || 0}:${payload.rgb_b64 || ""}`;
   let h1 = 0x811c9dc5;
   let h2 = 0x9e3779b9;
   for (let i = 0; i < text.length; i += 1) {
@@ -94,16 +96,16 @@ async function loadStoreRecord(storeName, key) {
 }
 
 async function loadEvidenceCheckpoint(key) {
-  return loadStoreRecord(EVIDENCE_STORE, key);
+  const record = await loadStoreRecord(EVIDENCE_STORE, key);
+  if (!record || Number(record.version) !== VISUAL_EVIDENCE_VERSION) return null;
+  return record;
 }
 
 async function loadReferenceEvidence(size) {
   const record = await loadStoreRecord(REFERENCE_STORE, "current");
   if (!record?.evidence || Number(record.size) !== Number(size)) return null;
   const evidence = record.evidence;
-  // v0.5 reference matching added calibrated distinctiveness. Reject older
-  // persisted matrices so a reload cannot silently reuse the previous raw
-  // similarity score where many ocean/sky destinations all looked ~98% good.
+  if (Number(evidence.version) !== REFERENCE_EVIDENCE_VERSION) return null;
   if (!Number.isFinite(Number(evidence.raw_fit)) || !Number.isFinite(Number(evidence.distinctiveness))) return null;
   return evidence;
 }
@@ -117,7 +119,7 @@ async function saveEvidenceCheckpoint(key, evidence) {
     store.clear();
     store.put({
       key,
-      version: 1,
+      version: VISUAL_EVIDENCE_VERSION,
       states: evidence.states,
       scores: evidence.scores.buffer.slice(evidence.scores.byteOffset, evidence.scores.byteOffset + evidence.scores.byteLength),
       models: evidence.models || {},
@@ -142,7 +144,7 @@ async function saveEvidenceCheckpoint(key, evidence) {
 function evidenceForPython(evidence, referenceEvidence) {
   if (!evidence && !referenceEvidence) return null;
   const out = {
-    version: 1,
+    version: VISUAL_EVIDENCE_VERSION,
     states: Number(evidence?.states || referenceEvidence?.states || 0),
   };
   if (evidence) {
@@ -313,7 +315,7 @@ async function solve(payload) {
   status("reconstruct", `Reconstructing ${size}×${size}×${size} picture cube…`, 0.87);
   const payloadJson = JSON.stringify(payload);
   pyodide.globals.set("_scan_payload_json", payloadJson);
-  status("solve", "Finding a legal move sequence…", 0.94);
+  status("solve", "Finding and comparing legal move sequences…", 0.94);
   const resultJson = await pyodide.runPythonAsync("cube_backend.solve_scan(_scan_payload_json)");
   const result = JSON.parse(String(resultJson));
   status("complete", "Solved", 1);
