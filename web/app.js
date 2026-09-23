@@ -1,4 +1,5 @@
 import { CubeView } from "./cube-view.js";
+import { clearScan, loadScan, saveScan } from "./scan-store.js";
 
 const FACE_ORDER = ["U", "R", "F", "D", "L", "B"];
 const TILE_SIZE = 48;
@@ -23,6 +24,11 @@ const progressBar = $("#scan-progress");
 const stabilityLabel = $("#stability-label");
 const reviewGrid = $("#review-grid");
 const workerStatus = $("#worker-status");
+const solveProgressWrap = $("#solve-progress-wrap");
+const solveProgressTrack = $("#solve-progress-track");
+const solveProgressBar = $("#solve-progress-bar");
+const solveProgressLabel = $("#solve-progress-label");
+const solveProgressValue = $("#solve-progress-value");
 const resultPanel = $("#result-panel");
 const resultSummary = $("#result-summary");
 const moveText = $("#move-text");
@@ -50,6 +56,7 @@ let solution = null;
 let moveIndex = 0;
 let playing = false;
 let cubeView = null;
+let scanSaveChain = Promise.resolve();
 
 function faceSequence() {
   const n = `${cubeSize}×${cubeSize}`;
@@ -63,12 +70,43 @@ function faceSequence() {
   ];
 }
 
+function setSolveProgress(value, label = "") {
+  if (!Number.isFinite(value)) return;
+  const clamped = Math.max(0, Math.min(1, value));
+  const percent = Math.round(clamped * 100);
+  solveProgressWrap.hidden = false;
+  solveProgressBar.style.width = `${percent}%`;
+  solveProgressValue.textContent = `${percent}%`;
+  solveProgressTrack.setAttribute("aria-valuenow", String(percent));
+  if (label) solveProgressLabel.textContent = label;
+}
+
+function hideSolveProgress() {
+  solveProgressWrap.hidden = true;
+  solveProgressBar.style.width = "0%";
+  solveProgressValue.textContent = "0%";
+  solveProgressTrack.setAttribute("aria-valuenow", "0");
+}
+
+function persistCurrentScan() {
+  const size = cubeSize;
+  const captureSnapshot = new Map(captures);
+  const rotationSnapshot = new Map(captureRotations);
+  scanSaveChain = scanSaveChain
+    .catch(() => {})
+    .then(() => saveScan(size, captureSnapshot, rotationSnapshot))
+    .catch((error) => console.warn("Could not persist scan", error));
+  return scanSaveChain;
+}
+
 const worker = new Worker(new URL("./solver-worker.js", import.meta.url));
 worker.postMessage({ type: "warm" });
 worker.addEventListener("message", (event) => {
   const msg = event.data || {};
-  if (msg.type === "status") workerStatus.textContent = msg.detail || msg.stage;
-  else if (msg.type === "python-ready") {
+  if (msg.type === "status") {
+    workerStatus.textContent = msg.detail || msg.stage;
+    if (solving && Number.isFinite(msg.progress)) setSolveProgress(msg.progress, msg.detail || msg.stage);
+  } else if (msg.type === "python-ready") {
     pythonReady = true;
     workerStatus.textContent = `Python ${msg.version}`;
   } else if (msg.type === "solver-ready") {
@@ -77,10 +115,13 @@ worker.addEventListener("message", (event) => {
     updateSolveButton();
   } else if (msg.type === "solution") {
     solving = false;
+    setSolveProgress(1, "Solved");
     showSolution(msg.result).catch(showError);
     updateSolveButton();
+    setTimeout(() => { if (!solving) hideSolveProgress(); }, 1200);
   } else if (msg.type === "error") {
     solving = false;
+    solveProgressLabel.textContent = "Stopped";
     showError(new Error(msg.message || "Worker failed"));
     updateSolveButton();
   }
@@ -128,7 +169,7 @@ function updateScanUI() {
 
 function updateSolveButton() {
   solveButton.disabled = captures.size !== 6 || solving || !workerReady;
-  if (captures.size === 6 && !workerReady) solveButton.textContent = pythonReady ? "Preparing…" : "Loading Python…";
+  if (captures.size === 6 && !workerReady) solveButton.textContent = pythonReady ? "Preparing…" : "Starting…";
   else if (solving) solveButton.textContent = "Solving…";
   else solveButton.textContent = `Solve ${cubeSize}×${cubeSize}×${cubeSize}`;
 }
@@ -147,6 +188,15 @@ async function startCamera() {
   captureButton.disabled = false;
   updateScanUI();
   requestAnimationFrame(stabilityLoop);
+}
+
+function stopCamera() {
+  for (const track of stream?.getTracks?.() || []) track.stop();
+  stream = null;
+  video.srcObject = null;
+  startButton.hidden = false;
+  cameraStage?.classList.remove("camera-stage--live");
+  captureButton.disabled = true;
 }
 
 function cropFromVideo() {
@@ -196,6 +246,7 @@ function captureFace() {
   else scanIndex += 1;
   renderReview();
   updateScanUI();
+  persistCurrentScan();
 }
 
 function renderReview() {
@@ -229,6 +280,7 @@ function renderReview() {
     rotate.addEventListener("click", () => {
       captureRotations.set(step.face, ((captureRotations.get(step.face) || 0) + 1) % 4);
       renderReview();
+      persistCurrentScan();
     });
     const retake = document.createElement("button");
     retake.type = "button";
@@ -347,10 +399,13 @@ async function solveCube() {
   solving = true;
   solution = null;
   resultPanel.hidden = true;
+  setSolveProgress(0.01, "Preparing scan…");
   updateSolveButton();
-  workerStatus.textContent = "Solving…";
+  workerStatus.textContent = "Preparing solve…";
+  await persistCurrentScan();
   const prepared = preparePayload();
   window.__lastTileCanvases = prepared.tiles;
+  stopCamera();
   worker.postMessage({ type: "solve", payload: prepared.payload });
 }
 
@@ -450,24 +505,46 @@ function resetScanForSize() {
   moveIndex = 0;
   playing = false;
   resultPanel.hidden = true;
+  hideSolveProgress();
+  clearScan().catch((error) => console.warn("Could not clear saved scan", error));
   renderGuide();
   renderReview();
   updateScanUI();
 }
 
+async function restoreSavedScan() {
+  try {
+    const saved = await loadScan();
+    if (!saved?.captures?.size) return;
+    cubeSizeSelect.value = String(saved.size);
+    cubeSize = saved.size;
+    captures = saved.captures;
+    captureRotations = saved.rotations;
+    const sequence = faceSequence();
+    const firstMissing = sequence.findIndex((step) => !captures.has(step.face));
+    scanIndex = firstMissing < 0 ? sequence.length : firstMissing;
+    retakeFace = null;
+    renderGuide();
+    renderReview();
+    updateScanUI();
+    stabilityLabel.textContent = captures.size === 6 ? "Scan restored" : `${captures.size} faces restored`;
+  } catch (error) {
+    console.warn("Could not restore saved scan", error);
+  }
+}
+
 startButton.addEventListener("click", () => startCamera().catch(showError));
 captureButton.addEventListener("click", captureFace);
-solveButton.addEventListener("click", solveCube);
+solveButton.addEventListener("click", () => solveCube().catch(showError));
 prevButton.addEventListener("click", previousMove);
 nextButton.addEventListener("click", nextMove);
 playButton.addEventListener("click", togglePlay);
 resetButton.addEventListener("click", resetPlayback);
 cubeSizeSelect.addEventListener("change", resetScanForSize);
 
-window.addEventListener("pagehide", () => {
-  for (const track of stream?.getTracks?.() || []) track.stop();
-});
+window.addEventListener("pagehide", () => stopCamera());
 
 renderGuide();
 renderReview();
 updateScanUI();
+restoreSavedScan();
