@@ -1,0 +1,35 @@
+.solve-progress-wrap {
+  display: grid;
+  gap: .5rem;
+  padding: .8rem .9rem;
+  border: 1px solid var(--app-border);
+  border-radius: .9rem;
+  background: color-mix(in srgb, var(--pages-accent, #147f72) 7%, transparent);
+}
+
+.solve-progress-wrap[hidden] { display: none; }
+.solve-progress__meta {
+  display: flex;
+  gap: .75rem;
+  justify-content: space-between;
+  align-items: baseline;
+  font-size: .78rem;
+}
+.solve-progress__meta span:last-child {
+  font-variant-numeric: tabular-nums;
+  color: color-mix(in srgb, currentColor 62%, transparent);
+}
+.solve-progress {
+  height: .55rem;
+  overflow: hidden;
+  border-radius: 999px;
+  background: color-mix(in srgb, currentColor 10%, transparent);
+}
+.solve-progress span {
+  display: block;
+  width: 0;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--pages-accent);
+  transition: width 180ms ease;
+}

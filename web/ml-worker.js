@@ -40,8 +40,8 @@ let capabilitiesPromise = null;
 let ortPromise = null;
 const sessions = new Map();
 
-function status(stage, detail = "") {
-  postMessage({ type: "ml-status", stage, detail });
+function status(stage, detail = "", progress = null) {
+  postMessage({ type: "ml-status", stage, detail, progress });
 }
 
 async function capabilities() {
@@ -66,7 +66,7 @@ async function loadSession(key) {
   const promise = (async () => {
     const ort = await ortModule();
     const caps = await capabilities();
-    ort.env.wasm.numThreads = caps.wasmThreads ? Math.max(1, Math.min(8, caps.cpuWorkers)) : 1;
+    ort.env.wasm.numThreads = caps.wasmThreads ? Math.max(1, Math.min(4, caps.cpuWorkers)) : 1;
     const candidates = [];
     if (caps.webgpu) candidates.push(["webgpu"]);
     if (caps.webgl2) candidates.push(["webgl"]);
@@ -94,6 +94,40 @@ async function loadSession(key) {
     sessions.delete(key);
     throw error;
   }
+}
+
+async function releaseSession(key) {
+  const pending = sessions.get(key);
+  sessions.delete(key);
+  if (!pending) return;
+  try {
+    const loaded = await pending;
+    await loaded.session?.release?.();
+  } catch (_) {}
+}
+
+async function releaseAllSessions() {
+  const keys = [...sessions.keys()];
+  for (const key of keys) await releaseSession(key);
+}
+
+function disposeOutputs(outputs) {
+  if (!outputs) return;
+  for (const tensor of Object.values(outputs)) tensor?.dispose?.();
+}
+
+function memoryPlan(caps, pythonResident = false) {
+  const constrained = pythonResident || caps.memoryTier === "low";
+  const medium = !constrained && caps.memoryTier === "medium";
+  const veryLarge = !pythonResident && !caps.mobile && caps.memoryTier === "high" && caps.webgpu && caps.memoryBudgetMB >= 1200;
+  return {
+    workers: constrained ? Math.min(2, caps.cpuWorkers) : medium ? Math.min(4, caps.cpuWorkers) : caps.cpuWorkers,
+    useDino: !constrained && (caps.webgpu || (!caps.mobile && caps.hardwareConcurrency >= 8)),
+    pairModels: constrained ? ["xfeat"] : medium ? ["xfeat", "lightglue"] : ["lightglue", "xfeat", "loftr"],
+    candidateLimit: constrained ? 4 : medium ? 10 : 24,
+    useRoma: veryLarge,
+    constrained,
+  };
 }
 
 function statePixel(raw, tileSize, state, x, y) {
@@ -156,26 +190,6 @@ function cosine(a, b) {
   return dot / Math.sqrt(aa * bb);
 }
 
-async function dinoEmbeddings(raw, tileSize, tileCount) {
-  const { session, provider } = await loadSession("dino");
-  const ort = await ortModule();
-  const name = session.inputNames[0];
-  const metadata = session.inputMetadata?.[name];
-  const dims = metadata?.dimensions || metadata?.dims || [];
-  const height = Number(dims[dims.length - 2]) > 0 ? Number(dims[dims.length - 2]) : 224;
-  const width = Number(dims[dims.length - 1]) > 0 ? Number(dims[dims.length - 1]) : 224;
-  const result = new Array(tileCount);
-  for (let tile = 0; tile < tileCount; tile += 1) {
-    const input = resizeState(raw, tileSize, tile * 4, width, height, 3, true);
-    const outputs = await session.run({ [name]: new ort.Tensor("float32", input, [1, 3, height, width]) });
-    const tensor = outputs.last_hidden_state || outputs[session.outputNames[0]];
-    const data = tensor.data;
-    const hidden = Number(tensor.dims[tensor.dims.length - 1]) || Math.min(384, data.length);
-    result[tile] = Float32Array.from(data.slice(0, hidden));
-  }
-  return { embeddings: result, provider };
-}
-
 function metadataDims(session, name) {
   const meta = session.inputMetadata?.[name];
   return meta?.dimensions || meta?.dims || [];
@@ -204,10 +218,9 @@ function normaliseConfidence(values) {
 }
 
 function scoreOutputs(outputs) {
-  const entries = Object.entries(outputs);
   const confidence = [];
   let matchCount = 0;
-  for (const [name, tensor] of entries) {
+  for (const [name, tensor] of Object.entries(outputs)) {
     const lower = name.toLowerCase();
     if (/(conf|score|certainty|mconf)/.test(lower)) {
       const data = tensor.data;
@@ -226,69 +239,128 @@ function scoreOutputs(outputs) {
   return null;
 }
 
+async function dinoEmbeddings(raw, tileSize, tileCount, onProgress) {
+  const { session, provider } = await loadSession("dino");
+  const ort = await ortModule();
+  const name = session.inputNames[0];
+  const metadata = session.inputMetadata?.[name];
+  const dims = metadata?.dimensions || metadata?.dims || [];
+  const height = Number(dims[dims.length - 2]) > 0 ? Number(dims[dims.length - 2]) : 224;
+  const width = Number(dims[dims.length - 1]) > 0 ? Number(dims[dims.length - 1]) : 224;
+  const result = new Array(tileCount);
+  try {
+    for (let tile = 0; tile < tileCount; tile += 1) {
+      const inputData = resizeState(raw, tileSize, tile * 4, width, height, 3, true);
+      const input = new ort.Tensor("float32", inputData, [1, 3, height, width]);
+      let outputs = null;
+      try {
+        outputs = await session.run({ [name]: input });
+        const tensor = outputs.last_hidden_state || outputs[session.outputNames[0]];
+        const data = tensor.data;
+        const hidden = Number(tensor.dims[tensor.dims.length - 1]) || Math.min(384, data.length);
+        result[tile] = Float32Array.from(data.slice(0, hidden));
+      } finally {
+        input.dispose?.();
+        disposeOutputs(outputs);
+      }
+      onProgress?.((tile + 1) / tileCount);
+    }
+    return { embeddings: result, provider };
+  } finally {
+    await releaseSession("dino");
+  }
+}
+
 async function runPairModel(key, raw, tileSize, aState, bState) {
   const { session, provider } = await loadSession(key);
   const ort = await ortModule();
   const names = session.inputNames;
   const feeds = {};
+  const inputs = [];
   if (names.length === 1) {
     const name = names[0];
     const shape = resolveShape(metadataDims(session, name), 1, 256);
     const one = resizeState(raw, tileSize, aState, shape.width, shape.height, shape.channels, false);
     const two = resizeState(raw, tileSize, bState, shape.width, shape.height, shape.channels, false);
-    const per = one.length;
-    const pair = new Float32Array(per * 2);
+    const pair = new Float32Array(one.length + two.length);
     pair.set(one, 0);
-    pair.set(two, per);
-    feeds[name] = new ort.Tensor("float32", pair, [2, shape.channels, shape.height, shape.width]);
+    pair.set(two, one.length);
+    const input = new ort.Tensor("float32", pair, [2, shape.channels, shape.height, shape.width]);
+    feeds[name] = input;
+    inputs.push(input);
   } else {
     for (let i = 0; i < Math.min(2, names.length); i += 1) {
       const name = names[i];
       const shape = resolveShape(metadataDims(session, name), 1, 256);
       const data = resizeState(raw, tileSize, i === 0 ? aState : bState, shape.width, shape.height, shape.channels, false);
-      feeds[name] = new ort.Tensor("float32", data, [1, shape.channels, shape.height, shape.width]);
+      const input = new ort.Tensor("float32", data, [1, shape.channels, shape.height, shape.width]);
+      feeds[name] = input;
+      inputs.push(input);
     }
   }
-  const outputs = await session.run(feeds);
-  return { score: scoreOutputs(outputs), provider };
+  let outputs = null;
+  try {
+    outputs = await session.run(feeds);
+    return { score: scoreOutputs(outputs), provider };
+  } finally {
+    for (const input of inputs) input.dispose?.();
+    disposeOutputs(outputs);
+  }
 }
 
 async function runRoma(raw, tileSize, aState, bState) {
   const caps = await capabilities();
-  if (!caps.webgpu || (caps.deviceMemory && caps.deviceMemory < 12)) return { score: null, provider: null, skipped: "memory" };
+  if (!caps.webgpu) return { score: null, provider: null, skipped: "no-webgpu" };
+  let descriptorOutputs = [];
   try {
     const descriptor = await loadSession("romaDescriptor");
-    const matcher = await loadSession("romaMatcher");
     const ort = await ortModule();
     const descriptorName = descriptor.session.inputNames[0];
     const shape = resolveShape(metadataDims(descriptor.session, descriptorName), 3, 320);
-    const descriptors = [];
     for (const state of [aState, bState]) {
       const data = resizeState(raw, tileSize, state, shape.width, shape.height, 3, false);
-      const outputs = await descriptor.session.run({ [descriptorName]: new ort.Tensor("float32", data, [1, 3, shape.height, shape.width]) });
-      descriptors.push(outputs);
+      const input = new ort.Tensor("float32", data, [1, 3, shape.height, shape.width]);
+      try {
+        descriptorOutputs.push(await descriptor.session.run({ [descriptorName]: input }));
+      } finally {
+        input.dispose?.();
+      }
     }
+    await releaseSession("romaDescriptor");
+
+    const matcher = await loadSession("romaMatcher");
     const feeds = {};
     const matcherNames = matcher.session.inputNames;
-    const tensorsA = Object.values(descriptors[0]);
-    const tensorsB = Object.values(descriptors[1]);
+    const tensorsA = Object.values(descriptorOutputs[0]);
+    const tensorsB = Object.values(descriptorOutputs[1]);
     for (let i = 0; i < matcherNames.length; i += 1) {
       const source = i < Math.ceil(matcherNames.length / 2) ? tensorsA : tensorsB;
-      const tensor = source[i % source.length];
-      feeds[matcherNames[i]] = tensor;
+      feeds[matcherNames[i]] = source[i % source.length];
     }
-    const outputs = await matcher.session.run(feeds);
-    return { score: scoreOutputs(outputs), provider: matcher.provider };
+    let outputs = null;
+    try {
+      outputs = await matcher.session.run(feeds);
+      return { score: scoreOutputs(outputs), provider: matcher.provider };
+    } finally {
+      disposeOutputs(outputs);
+      await releaseSession("romaMatcher");
+    }
   } catch (_) {
     return { score: null, provider: null };
+  } finally {
+    await releaseSession("romaDescriptor");
+    await releaseSession("romaMatcher");
+    for (const outputs of descriptorOutputs) disposeOutputs(outputs);
+    descriptorOutputs = [];
   }
 }
 
-async function classicalScores(raw, tileSize, tileCount, workers) {
+async function classicalScores(raw, tileSize, tileCount, workers, onProgress) {
   const states = tileCount * 4;
   const count = Math.max(1, Math.min(workers, states));
   const output = new Float32Array(4 * states * states);
   const jobs = [];
+  let completed = 0;
   for (let i = 0; i < count; i += 1) {
     const start = Math.floor(i * states / count);
     const end = Math.floor((i + 1) * states / count);
@@ -303,6 +375,8 @@ async function classicalScores(raw, tileSize, tileCount, workers) {
           output.set(scores.subarray(src, src + chunk * states), dst);
         }
         worker.terminate();
+        completed += 1;
+        onProgress?.(completed / count);
         resolve();
       };
       worker.onerror = (error) => { worker.terminate(); reject(error); };
@@ -362,43 +436,47 @@ function ambiguousCandidates(scores, tileCount, limit = 32) {
   return unique;
 }
 
-async function refinePairs(scores, raw, tileSize, tileCount, caps, modelStatus) {
+async function refinePairs(scores, raw, tileSize, tileCount, caps, plan, modelStatus) {
   const states = tileCount * 4;
-  const candidates = ambiguousCandidates(scores, tileCount, caps.webgpu ? 32 : 12);
-  const enabled = caps.webgpu ? ["lightglue", "loftr", "xfeat"] : ["xfeat", "lightglue"];
-  for (const key of enabled) {
+  const candidates = ambiguousCandidates(scores, tileCount, plan.candidateLimit);
+  const totalUnits = Math.max(1, plan.pairModels.length * Math.max(1, candidates.length) + (plan.useRoma ? 1 : 0));
+  let units = 0;
+  for (const key of plan.pairModels) {
     let used = 0;
     let provider = null;
-    for (const item of candidates) {
-      try {
+    status(key, `Checking ambiguous seams with ${MODELS[key].name}…`, 0.58 + 0.32 * (units / totalUnits));
+    try {
+      for (const item of candidates) {
         const result = await runPairModel(key, raw, tileSize, item.a, item.b);
         provider ||= result.provider;
-        if (result.score == null) continue;
-        const idx = item.side * states * states + item.a * states + item.b;
-        const w = MODELS[key].weight;
-        scores[idx] = scores[idx] * (1 - w) + result.score * w;
-        used += 1;
-      } catch (error) {
-        modelStatus[key] = { active: false, error: String(error?.message || error) };
-        break;
+        if (result.score != null) {
+          const idx = item.side * states * states + item.a * states + item.b;
+          const w = MODELS[key].weight;
+          scores[idx] = scores[idx] * (1 - w) + result.score * w;
+          used += 1;
+        }
+        units += 1;
+        status(key, `Checking ambiguous seams with ${MODELS[key].name}…`, 0.58 + 0.32 * (units / totalUnits));
       }
+      modelStatus[key] = used ? { active: true, provider, evaluated: used } : { active: false, skipped: "no-score" };
+    } catch (error) {
+      modelStatus[key] = { active: false, error: String(error?.message || error) };
+    } finally {
+      await releaseSession(key);
     }
-    if (used) modelStatus[key] = { active: true, provider, evaluated: used };
   }
 
-  if (caps.webgpu && (!caps.deviceMemory || caps.deviceMemory >= 12) && candidates.length) {
+  if (plan.useRoma && candidates.length) {
     const item = candidates[0];
-    status("roma", "Checking hardest seam with RoMaV2…");
+    status("roma", "Checking hardest seam with RoMaV2…", 0.92);
     const result = await runRoma(raw, tileSize, item.a, item.b);
     if (result.score != null) {
       const idx = item.side * states * states + item.a * states + item.b;
       const w = MODELS.romaMatcher.weight;
       scores[idx] = scores[idx] * (1 - w) + result.score * w;
       modelStatus.roma = { active: true, provider: result.provider, evaluated: 1 };
-    } else {
-      modelStatus.roma = { active: false, skipped: result.skipped || "unavailable" };
-    }
-  }
+    } else modelStatus.roma = { active: false, skipped: result.skipped || "unavailable" };
+  } else modelStatus.roma = { active: false, skipped: plan.constrained ? "memory-budget" : "not-required" };
 }
 
 async function analyse(data) {
@@ -407,34 +485,43 @@ async function analyse(data) {
   const tileSize = Number(data.tileSize);
   const tileCount = Number(data.tileCount);
   const modelStatus = {};
+  const plan = memoryPlan(caps, Boolean(data.pythonResident));
 
-  status("classical", `Scoring seams on ${caps.cpuWorkers} CPU worker${caps.cpuWorkers === 1 ? "" : "s"}…`);
-  const classicalPromise = classicalScores(raw, tileSize, tileCount, caps.cpuWorkers);
+  status("memory", `Using ${plan.workers} CPU worker${plan.workers === 1 ? "" : "s"} · ${caps.memoryTier} memory plan`, 0.02);
+  const classicalPromise = classicalScores(raw, tileSize, tileCount, plan.workers, (p) => {
+    status("classical", "Scoring picture seams…", 0.04 + p * 0.26);
+  });
 
   let dino = null;
-  const useDino = caps.webgpu || caps.hardwareConcurrency >= 6;
-  if (useDino) {
-    status("dino", "Loading DINOv2 visual features…");
+  if (plan.useDino) {
+    status("dino", "Loading DINOv2 visual features…", 0.30);
     try {
-      dino = await dinoEmbeddings(raw, tileSize, tileCount);
+      dino = await dinoEmbeddings(raw, tileSize, tileCount, (p) => {
+        status("dino", "Extracting DINOv2 visual features…", 0.30 + p * 0.24);
+      });
       modelStatus.dino = { active: true, provider: dino.provider, evaluated: tileCount };
     } catch (error) {
       modelStatus.dino = { active: false, error: String(error?.message || error) };
+      await releaseSession("dino");
     }
-  } else modelStatus.dino = { active: false, skipped: "low-power" };
+  } else modelStatus.dino = { active: false, skipped: "memory-budget" };
 
   const scores = await classicalPromise;
   if (dino) blendDino(scores, dino.embeddings, tileCount, MODELS.dino.weight);
+  dino = null;
 
-  status("ensemble", "Resolving ambiguous seams with learned matchers…");
-  await refinePairs(scores, raw, tileSize, tileCount, caps, modelStatus);
+  status("ensemble", "Resolving ambiguous seams with learned matchers…", 0.56);
+  await refinePairs(scores, raw, tileSize, tileCount, caps, plan, modelStatus);
+  await releaseAllSessions();
 
+  status("complete", "Visual evidence ready", 1);
   postMessage({
     type: "ml-result",
     scores,
     states: tileCount * 4,
     capabilities: caps,
     models: modelStatus,
+    memoryPlan: plan,
   }, [scores.buffer]);
 }
 
@@ -450,8 +537,14 @@ self.addEventListener("message", async (event) => {
       await analyse(event.data);
       return;
     }
+    if (type === "dispose") {
+      await releaseAllSessions();
+      close();
+      return;
+    }
     throw new Error(`Unknown ML worker message: ${type}`);
   } catch (error) {
+    await releaseAllSessions();
     postMessage({ type: "ml-error", message: error instanceof Error ? error.message : String(error) });
   }
 });
