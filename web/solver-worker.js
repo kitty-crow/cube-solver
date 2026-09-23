@@ -1,24 +1,27 @@
-/* Picture Cube Solver Python worker.
- * Camera frames never leave the browser. This worker hosts Pyodide and the
- * Python reconstruction/solver backend so CPU-heavy work never blocks the UI.
+/* Picture Cube Solver worker.
+ * Camera frames never leave the browser. Visual inference and Python solving
+ * are deliberately run in separate memory phases on constrained devices.
  */
 
 const PYODIDE_VERSION = "0.29.5";
 const PYODIDE_BASE = `https://cdn.jsdelivr.net/pyodide/v${PYODIDE_VERSION}/full/`;
+const RUNTIME_DB = "picture-cube-solver-runtime";
+const RUNTIME_DB_VERSION = 1;
+const EVIDENCE_STORE = "evidence";
 let pyodide = null;
 let readyPromise = null;
-let solverReady = false;
+let solverTablesReady = false;
 let mlWorker = null;
 let mlRequest = null;
+
+function status(stage, detail = "", progress = null) {
+  postMessage({ type: "status", stage, detail, progress });
+}
 
 function syncFs(populate) {
   return new Promise((resolve, reject) => {
     pyodide.FS.syncfs(populate, (error) => error ? reject(error) : resolve());
   });
-}
-
-function status(stage, detail = "") {
-  postMessage({ type: "status", stage, detail });
 }
 
 function base64ToBytes(encoded) {
@@ -35,27 +38,124 @@ function bytesToBase64(bytes) {
   return btoa(binary);
 }
 
+function scanFingerprint(payload) {
+  const text = `${payload.size || 3}:${payload.tile_size || 0}:${payload.rgb_b64 || ""}`;
+  let h1 = 0x811c9dc5;
+  let h2 = 0x9e3779b9;
+  for (let i = 0; i < text.length; i += 1) {
+    const c = text.charCodeAt(i);
+    h1 ^= c;
+    h1 = Math.imul(h1, 0x01000193);
+    h2 ^= c + i;
+    h2 = Math.imul(h2, 0x85ebca6b);
+  }
+  return `${(h1 >>> 0).toString(16)}${(h2 >>> 0).toString(16)}`;
+}
+
+function openRuntimeDb() {
+  return new Promise((resolve, reject) => {
+    if (!self.indexedDB) return reject(new Error("IndexedDB unavailable"));
+    const request = indexedDB.open(RUNTIME_DB, RUNTIME_DB_VERSION);
+    request.onupgradeneeded = () => {
+      const db = request.result;
+      if (!db.objectStoreNames.contains(EVIDENCE_STORE)) db.createObjectStore(EVIDENCE_STORE, { keyPath: "key" });
+    };
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error || new Error("Could not open runtime storage"));
+  });
+}
+
+async function loadEvidenceCheckpoint(key) {
+  let db;
+  try {
+    db = await openRuntimeDb();
+    const transaction = db.transaction(EVIDENCE_STORE, "readonly");
+    return await new Promise((resolve, reject) => {
+      const request = transaction.objectStore(EVIDENCE_STORE).get(key);
+      request.onsuccess = () => resolve(request.result || null);
+      request.onerror = () => reject(request.error || new Error("Could not read visual checkpoint"));
+    });
+  } catch (_) {
+    return null;
+  } finally {
+    db?.close?.();
+  }
+}
+
+async function saveEvidenceCheckpoint(key, evidence) {
+  let db;
+  try {
+    db = await openRuntimeDb();
+    const transaction = db.transaction(EVIDENCE_STORE, "readwrite");
+    const store = transaction.objectStore(EVIDENCE_STORE);
+    store.clear();
+    store.put({
+      key,
+      version: 1,
+      states: evidence.states,
+      scores: evidence.scores.buffer.slice(evidence.scores.byteOffset, evidence.scores.byteOffset + evidence.scores.byteLength),
+      models: evidence.models || {},
+      capabilities: evidence.capabilities || {},
+      memoryPlan: evidence.memoryPlan || {},
+      savedAt: Date.now(),
+    });
+    await new Promise((resolve, reject) => {
+      transaction.oncomplete = resolve;
+      transaction.onerror = () => reject(transaction.error || new Error("Could not save visual checkpoint"));
+      transaction.onabort = () => reject(transaction.error || new Error("Could not save visual checkpoint"));
+    });
+    return true;
+  } catch (error) {
+    console.warn("Could not checkpoint visual evidence", error);
+    return false;
+  } finally {
+    db?.close?.();
+  }
+}
+
+function evidenceForPython(evidence) {
+  if (!evidence) return null;
+  const scores = evidence.scores instanceof Float32Array
+    ? evidence.scores
+    : new Float32Array(evidence.scores);
+  const bytes = new Uint8Array(scores.buffer, scores.byteOffset, scores.byteLength);
+  return {
+    version: 1,
+    states: evidence.states,
+    seam_f32_b64: bytesToBase64(bytes),
+    models: evidence.models || {},
+    capabilities: evidence.capabilities || {},
+    memory_plan: evidence.memoryPlan || {},
+  };
+}
+
+function destroyMlWorker() {
+  if (!mlWorker) return;
+  try { mlWorker.terminate(); } catch (_) {}
+  mlWorker = null;
+  mlRequest = null;
+}
+
 function ensureMlWorker() {
   if (mlWorker) return mlWorker;
   mlWorker = new Worker(new URL("./ml-worker.js", self.location.href), { type: "module" });
   mlWorker.addEventListener("message", (event) => {
     const msg = event.data || {};
     if (msg.type === "ml-status") {
-      status(`vision-${msg.stage}`, msg.detail || msg.stage);
+      const local = Number.isFinite(msg.progress) ? Math.max(0, Math.min(1, msg.progress)) : null;
+      status(`vision-${msg.stage}`, msg.detail || msg.stage, local == null ? null : 0.04 + local * 0.48);
       return;
     }
     if (msg.type === "ml-result") {
       const pending = mlRequest;
       mlRequest = null;
       if (!pending) return;
-      const scores = msg.scores instanceof Float32Array ? msg.scores : new Float32Array(msg.scores);
-      const bytes = new Uint8Array(scores.buffer, scores.byteOffset, scores.byteLength);
       pending.resolve({
-        version: 1,
+        scores: msg.scores instanceof Float32Array ? msg.scores : new Float32Array(msg.scores),
         states: msg.states,
-        seam_f32_b64: bytesToBase64(bytes),
         models: msg.models || {},
         capabilities: msg.capabilities || {},
+        memoryPlan: msg.memoryPlan || {},
       });
       return;
     }
@@ -70,7 +170,6 @@ function ensureMlWorker() {
     mlRequest = null;
     pending?.reject(new Error(event.message || "Visual ensemble worker failed"));
   });
-  mlWorker.postMessage({ type: "warm" });
   return mlWorker;
 }
 
@@ -79,7 +178,7 @@ async function runVisualEnsemble(payload) {
   if (mlRequest) throw new Error("Visual ensemble is already analysing a scan");
   const raw = base64ToBytes(payload.rgb_b64);
   const tileCount = 6 * Number(payload.size || 3) ** 2;
-  status("vision", "Analysing picture continuity…");
+  status("vision", "Analysing picture continuity…", 0.04);
   return new Promise((resolve, reject) => {
     mlRequest = { resolve, reject };
     const buffer = raw.buffer;
@@ -88,6 +187,7 @@ async function runVisualEnsemble(payload) {
       rawBuffer: buffer,
       tileSize: Number(payload.tile_size),
       tileCount,
+      pythonResident: Boolean(pyodide),
     }, [buffer]);
   });
 }
@@ -107,79 +207,98 @@ async function loadBackendFiles() {
   pyodide.runPython("import sys; sys.path.insert(0, '/app')");
 }
 
-async function initialise() {
-  if (readyPromise) return readyPromise;
-  readyPromise = (async () => {
-    status("runtime", "Loading Python…");
-    importScripts(`${PYODIDE_BASE}pyodide.js`);
-    pyodide = await loadPyodide({ indexURL: PYODIDE_BASE });
+async function initialisePython(size) {
+  if (!readyPromise) {
+    readyPromise = (async () => {
+      status("runtime", "Loading Python runtime…", 0.60);
+      importScripts(`${PYODIDE_BASE}pyodide.js`);
+      pyodide = await loadPyodide({ indexURL: PYODIDE_BASE });
 
-    status("packages", "Loading packages…");
-    await pyodide.loadPackage(["numpy", "micropip"]);
-    await pyodide.runPythonAsync(`
+      status("packages", "Loading solver packages…", 0.68);
+      await pyodide.loadPackage(["numpy", "micropip"]);
+      await pyodide.runPythonAsync(`
 import micropip
 await micropip.install("rubik-solver-py==0.1.1")
 `);
 
-    try {
-      pyodide.FS.mkdirTree("/solver-cache");
-      pyodide.FS.mount(pyodide.FS.filesystems.IDBFS, {}, "/solver-cache");
-      await syncFs(true);
-      pyodide.runPython(`
+      try {
+        pyodide.FS.mkdirTree("/solver-cache");
+        pyodide.FS.mount(pyodide.FS.filesystems.IDBFS, {}, "/solver-cache");
+        await syncFs(true);
+        pyodide.runPython(`
 import os
 os.environ["RUBIK_SOLVER_CACHE_DIR"] = "/solver-cache/rubik_solver"
 `);
-    } catch (error) {
-      console.warn("Persistent solver cache unavailable", error);
-    }
+      } catch (error) {
+        console.warn("Persistent solver cache unavailable", error);
+      }
 
-    await loadBackendFiles();
-    pyodide.runPython("import cube_backend");
-    postMessage({ type: "python-ready", version: PYODIDE_VERSION });
+      status("backend", "Loading cube reconstruction backend…", 0.75);
+      await loadBackendFiles();
+      pyodide.runPython("import cube_backend");
+      postMessage({ type: "python-ready", version: PYODIDE_VERSION });
+    })();
+  }
+  await readyPromise;
 
-    status("tables", "Preparing 3×3 tables…");
+  if (Number(size) === 3 && !solverTablesReady) {
+    status("tables", "Preparing 3×3 solver tables…", 0.81);
     await pyodide.runPythonAsync("cube_backend.warm_solver()");
+    solverTablesReady = true;
     try { await syncFs(false); } catch (error) { console.warn("Could not persist solver cache", error); }
-    solverReady = true;
-    postMessage({ type: "solver-ready" });
-    status("ready", "Ready");
-
-    // Warm capability detection independently. Model weights remain lazy so a
-    // user who never solves a scan does not pay the network/memory cost.
-    try { ensureMlWorker(); } catch (error) { console.warn("ML worker unavailable", error); }
-  })();
-  return readyPromise;
+  }
 }
 
 async function solve(payload) {
-  await initialise();
-  if (!solverReady) {
-    await pyodide.runPythonAsync("cube_backend.warm_solver()");
-    solverReady = true;
+  const size = Number(payload.size || 3);
+  const fingerprint = scanFingerprint(payload);
+  status("checkpoint", "Checking saved visual work…", 0.02);
+
+  let evidence = await loadEvidenceCheckpoint(fingerprint);
+  if (evidence) {
+    status("checkpoint", "Reusing saved visual analysis…", 0.52);
+  } else {
+    try {
+      evidence = await runVisualEnsemble(payload);
+      if (evidence) {
+        status("offload", "Saving visual work before loading the solver…", 0.54);
+        const saved = await saveEvidenceCheckpoint(fingerprint, evidence);
+        if (saved) evidence = null;
+      }
+    } catch (error) {
+      console.warn("Visual ensemble unavailable; continuing with deterministic CV", error);
+      evidence = null;
+      status("vision-fallback", "Using deterministic picture matching…", 0.54);
+    }
   }
 
-  try {
-    payload.visual_evidence = await runVisualEnsemble(payload);
-  } catch (error) {
-    console.warn("Visual ensemble unavailable; continuing with deterministic CV", error);
-    payload.visual_evidence = null;
-    status("vision-fallback", "Using deterministic picture matching…");
-  }
+  // This is intentional: never keep neural model sessions resident while
+  // Pyodide and solver tables are being allocated.
+  destroyMlWorker();
+  status("memory-release", "Released ML/GPU memory · loading solver…", 0.57);
+  await initialisePython(size);
 
-  status("reconstruct", `Solving ${payload.size || 3}×${payload.size || 3}×${payload.size || 3}…`);
+  if (!evidence) evidence = await loadEvidenceCheckpoint(fingerprint);
+  payload.visual_evidence = evidenceForPython(evidence);
+  evidence = null;
+
+  status("reconstruct", `Reconstructing ${size}×${size}×${size} picture cube…`, 0.87);
   const payloadJson = JSON.stringify(payload);
   pyodide.globals.set("_scan_payload_json", payloadJson);
+  status("solve", "Finding a legal move sequence…", 0.94);
   const resultJson = await pyodide.runPythonAsync("cube_backend.solve_scan(_scan_payload_json)");
   const result = JSON.parse(String(resultJson));
+  status("complete", "Solved", 1);
   postMessage({ type: "solution", result });
-  status("ready", "Ready");
+  status("ready", "Ready", null);
 }
 
 self.addEventListener("message", async (event) => {
   const { type } = event.data || {};
   try {
     if (type === "warm") {
-      await initialise();
+      status("ready", "Ready", null);
+      postMessage({ type: "solver-ready" });
       return;
     }
     if (type === "solve") {
@@ -189,15 +308,11 @@ self.addEventListener("message", async (event) => {
     throw new Error(`Unknown worker message: ${type}`);
   } catch (error) {
     console.error(error);
+    destroyMlWorker();
     postMessage({
       type: "error",
       message: error instanceof Error ? error.message : String(error),
       stack: error instanceof Error ? error.stack : "",
     });
   }
-});
-
-initialise().catch((error) => {
-  console.error(error);
-  postMessage({ type: "error", message: error instanceof Error ? error.message : String(error) });
 });
