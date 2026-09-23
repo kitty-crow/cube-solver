@@ -60,10 +60,11 @@
         <canvas id="probe-canvas" hidden></canvas>
         <div class="camera-actions">
           <button id="start-camera" class="pages-button pages-button--primary" type="button">Start camera</button>
+          <button id="stop-camera" class="pages-button" type="button" hidden>Stop camera</button>
           <button id="capture-face" class="pages-button pages-button--primary" type="button" disabled>Capture face</button>
-          <label class="auto-toggle">
-            <input id="auto-capture" type="checkbox" checked>
-            <span>Auto-capture</span>
+          <label class="scan-option">
+            <input id="rounded-cubies" type="checkbox">
+            <span>Rounded cubies</span>
           </label>
         </div>
       </div>
@@ -95,7 +96,10 @@
     </section>
 
     <section class="review-section" aria-labelledby="review-title">
-      <div class="section-heading"><h2 id="review-title">Captured faces</h2></div>
+      <div class="section-heading">
+        <h2 id="review-title">Captured faces</h2>
+        <button id="clear-image-memory" class="pages-button pages-button--quiet" type="button">Clear image memory</button>
+      </div>
       <div id="review-grid" class="review-grid"><p class="review-empty">No captures yet.</p></div>
     </section>
 
