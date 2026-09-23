@@ -11,7 +11,7 @@ from cube_backend.vision import TileBank, set_visual_evidence  # noqa: E402
 
 
 class SemanticReferenceEvidenceTests(unittest.TestCase):
-    TILE_SIZE = 2
+    TILE_SIZE = 16
     TILE_COUNT = 24
     STATES = TILE_COUNT * 4
 
