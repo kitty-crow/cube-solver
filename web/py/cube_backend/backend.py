@@ -11,10 +11,6 @@ from .vision import set_visual_evidence
 from . import generic as _generic
 from .surface import face_neighbours as _surface_face_neighbours
 
-# All NxN reconstructors import generic.face_neighbours lazily. Replace the
-# flat-face graph with the wrapped physical surface graph before those modules
-# are imported, so picture continuity across all 12 cube edges participates in
-# the same beam search as ordinary in-face seams.
 _generic.face_neighbours = _surface_face_neighbours
 
 _SOLVER_READY = False
@@ -55,11 +51,6 @@ def _solve_3x3(raw: bytes, tile_size: int) -> dict:
     if not check.is_solved():
         raise RuntimeError("Solver returned a sequence that did not solve the reconstructed state")
 
-    # Centre rotations are visually ambiguous on picture cubes, especially on
-    # ocean-heavy artwork. The local reconstruction used to choose all six
-    # independently and only discover here that the resulting supercube state
-    # was impossible. Re-fit them against the selected edge geometry while
-    # enforcing the reachable centre subgroup after the cubie solution.
     centre_fit = fit_reachable_centres(raw, tile_size, reconstruction, solution)
     reconstruction["center_rotations"] = centre_fit["rotations"]
 
@@ -85,6 +76,23 @@ def _solve_3x3(raw: bytes, tile_size: int) -> dict:
     }
 
 
+def _reference_summary(evidence) -> dict | None:
+    if not isinstance(evidence, dict):
+        return None
+    reference = evidence.get("reference_evidence")
+    if not isinstance(reference, dict):
+        return None
+    source = reference.get("reference") if isinstance(reference.get("reference"), dict) else {}
+    return {
+        "subject": reference.get("subject"),
+        "fit": reference.get("fit"),
+        "title": source.get("title"),
+        "source_url": source.get("source_url"),
+        "layout": source.get("layout"),
+        "recognition_model": reference.get("recognition_model"),
+    }
+
+
 def solve_scan(payload_json: str) -> str:
     payload = json.loads(payload_json)
     size = int(payload.get("size", 3))
@@ -100,8 +108,10 @@ def solve_scan(payload_json: str) -> str:
         elif size == 3:
             result = _solve_3x3(raw, tile_size)
         elif size == 4:
-            from .bigcube import solve_scan_4x4
-            result = solve_scan_4x4(raw, tile_size)
+            from . import bigcube
+            from .semantic_scoring import patch_incremental_reconstructor
+            patch_incremental_reconstructor(bigcube)
+            result = bigcube.solve_scan_4x4(raw, tile_size)
         else:
             raise ValueError(f"Unsupported cube size: {size}×{size}×{size}")
     finally:
@@ -112,4 +122,7 @@ def solve_scan(payload_json: str) -> str:
             "models": evidence.get("models", {}),
             "capabilities": evidence.get("capabilities", {}),
         }
+        summary = _reference_summary(evidence)
+        if summary:
+            result["semantic_reference"] = summary
     return json.dumps(result, separators=(",", ":"))
