@@ -24,13 +24,15 @@ class SemanticReferenceEvidenceTests(unittest.TestCase):
         values[wanted_state * self.TILE_COUNT + 7] = 1.0
         values[wanted_state * self.TILE_COUNT + 8] = 0.0
         return {
-            "version": 1,
+            "version": 2,
             "states": self.STATES,
             "reference_evidence": {
-                "version": 1,
+                "version": 2,
                 "states": self.STATES,
                 "targets": self.TILE_COUNT,
                 "fit": fit,
+                "raw_fit": fit,
+                "distinctiveness": 0.8,
                 "absolute_f32_b64": base64.b64encode(values.tobytes()).decode("ascii"),
             },
         }
@@ -38,28 +40,30 @@ class SemanticReferenceEvidenceTests(unittest.TestCase):
     def tearDown(self):
         set_visual_evidence(None)
 
-    def test_strong_reference_rewards_matching_absolute_destination(self):
+    def test_reference_rewards_matching_absolute_destination(self):
         set_visual_evidence(self.evidence(0.9))
         bank = TileBank(self.raw(), self.TILE_SIZE, self.TILE_COUNT)
         self.assertGreater(bank.placement_score(3, 2, 7), 0.0)
-        self.assertLess(bank.placement_score(3, 2, 8), 0.0)
+        self.assertLessEqual(bank.placement_score(3, 2, 8), 0.0)
         self.assertAlmostEqual(bank.placement_score(3, 2, 9), 0.0, places=7)
 
-    def test_weak_reference_is_ignored(self):
+    def test_selected_reference_remains_authoritative_at_moderate_fit(self):
         set_visual_evidence(self.evidence(0.30))
         bank = TileBank(self.raw(), self.TILE_SIZE, self.TILE_COUNT)
-        self.assertAlmostEqual(bank.placement_score(3, 2, 7), 0.0, places=7)
-        self.assertAlmostEqual(bank.placement_score(3, 2, 8), 0.0, places=7)
+        self.assertGreater(bank.placement_score(3, 2, 7), 0.0)
+        self.assertLessEqual(bank.placement_score(3, 2, 8), 0.0)
 
     def test_missing_or_wrong_sized_reference_falls_back_cleanly(self):
         set_visual_evidence({
-            "version": 1,
+            "version": 2,
             "states": self.STATES,
             "reference_evidence": {
-                "version": 1,
+                "version": 2,
                 "states": self.STATES,
                 "targets": self.TILE_COUNT - 1,
                 "fit": 1.0,
+                "raw_fit": 1.0,
+                "distinctiveness": 1.0,
                 "absolute_f32_b64": "AAAA",
             },
         })
