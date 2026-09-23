@@ -30,7 +30,6 @@ def _selected_edges(reconstruction: dict):
 
 
 def centre_rotation_scores(raw: bytes, tile_size: int, reconstruction: dict) -> list[list[float]]:
-    """Score each quarter-turn of each fixed centre against its four edge neighbours."""
     bank = TileBank(raw, tile_size)
     edges = _selected_edges(reconstruction)
     scores = [[0.0] * 4 for _ in range(6)]
@@ -38,7 +37,7 @@ def centre_rotation_scores(raw: bytes, tile_size: int, reconstruction: dict) -> 
     for face in range(6):
         touching = [c for c in edges if any(p.target_face == face for p in c.placements)]
         for rotation in range(4):
-            total = 0.0
+            total = bank.placement_score(CENTER_FACELET[face], rotation, CENTER_FACELET[face])
             for candidate in touching:
                 for placement in candidate.placements:
                     if placement.target_face != face:
@@ -58,12 +57,6 @@ def centre_rotation_scores(raw: bytes, tile_size: int, reconstruction: dict) -> 
 
 
 def _remaining_is_reachable(rotations: tuple[int, ...], solution: str) -> bool:
-    """Pure-centre algorithms generate exactly the even-sum subgroup of Z4^6.
-
-    The generators are arbitrary single-centre 180-degree turns (2e_i) and
-    adjacent +90/-90 pairs (e_i-e_j).  Their quotient leaves one Z2 invariant,
-    so a centre-only state is reachable exactly when the orientation sum is even.
-    """
     remaining = centres_after_solution(list(rotations), solution)
     return sum(int(x) for x in remaining) % 2 == 0
 
