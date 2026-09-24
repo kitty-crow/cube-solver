@@ -14,6 +14,23 @@ from .surface import face_neighbours as _surface_face_neighbours
 _generic.face_neighbours = _surface_face_neighbours
 
 _SOLVER_READY = False
+_PROGRESS_CALLBACK = None
+
+
+def set_progress_callback(callback=None) -> None:
+    global _PROGRESS_CALLBACK
+    _PROGRESS_CALLBACK = callback
+
+
+def _emit_progress(detail: str, progress: float) -> None:
+    callback = _PROGRESS_CALLBACK
+    if callback is None:
+        return
+    try:
+        callback(str(detail), float(progress))
+    except Exception:
+        # Progress reporting must never be able to break a solve.
+        pass
 
 
 def warm_solver() -> str:
@@ -193,14 +210,17 @@ def solve_scan(payload_json: str) -> str:
     raw = base64.b64decode(payload["rgb_b64"])
     evidence = payload.get("visual_evidence")
 
+    _emit_progress("Preparing legal reconstruction search…", 0.941)
     set_visual_evidence(evidence)
     try:
         if size == 2:
+            _emit_progress("Reconstructing legal 2×2 state…", 0.955)
             from .pocket import solve_scan_2x2
             result = solve_scan_2x2(raw, tile_size)
         elif size == 3:
             result = _solve_3x3(raw, tile_size)
         elif size == 4:
+            _emit_progress("Reconstructing centres and wings…", 0.955)
             from . import bigcube
             _patch_bigcube_semantic_scoring(bigcube)
             result = bigcube.solve_scan_4x4(raw, tile_size)
@@ -209,6 +229,7 @@ def solve_scan(payload_json: str) -> str:
     finally:
         set_visual_evidence(None)
 
+    _emit_progress("Packaging verified solution…", 0.991)
     if isinstance(evidence, dict):
         result["visual_ensemble"] = {
             "models": evidence.get("models", {}),
