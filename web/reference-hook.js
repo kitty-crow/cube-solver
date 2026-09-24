@@ -1,6 +1,6 @@
 import { loadScan } from "./scan-store.js";
 import { buildPayloadFromCaptures } from "./scan-geometry.js";
-import { ReferenceAssistant } from "./reference-ui.js";
+import { ReferenceAssistant } from "./reference-ui-v2.js";
 
 const TILE_SIZE = 48;
 const ROUNDED_SETTING = "picture-cube-rounded-cubies";
