@@ -1,5 +1,77 @@
+import math
+
 from . import backend as _backend
 from . import reconstruct as _reconstruct_module
+
+
+_CENTRE_FACELETS = frozenset(_reconstruct_module.CENTER_FACELET)
+
+
+def _centre_anchor_confidence(target_facelet: int, tile: int):
+    """Return the hard confidence for a centre mapping, or None for non-centres.
+
+    Centre ownership is user-anchored ground truth. A centre tile may only map to
+    its own face centre and that assignment always has confidence 1.0. Rotation
+    remains visual evidence, but centre identity never participates in ambiguity
+    relaxation or hypothesis negotiation.
+    """
+    target_is_centre = target_facelet in _CENTRE_FACELETS
+    tile_is_centre = tile in _CENTRE_FACELETS
+    if not target_is_centre and not tile_is_centre:
+        return None
+    if target_facelet != tile:
+        raise RuntimeError(
+            f"Centre-anchor invariant violated: centre tile {tile} cannot map to {target_facelet}"
+        )
+    return 1.0
+
+
+def _hard_centre_reference_verification(bank, edges, corners, center_rots):
+    if not bank.has_reference:
+        return None
+    placed = _reconstruct_module._target_placements(edges, corners, center_rots)
+    agreements = []
+    strong = 0
+    centre_count = 0
+    for target, (tile, rot) in placed.items():
+        centre_confidence = _centre_anchor_confidence(target, tile)
+        if centre_confidence is not None:
+            agreements.append(centre_confidence)
+            strong += 1
+            centre_count += 1
+            continue
+
+        row = bank.placement_percentile(tile, rot, target)
+        col = bank.target_percentile(tile, rot, target)
+        if row is None or col is None:
+            continue
+        agreement = math.sqrt(max(0.0, row * col))
+        agreements.append(agreement)
+        if row >= 0.80 and col >= 0.80:
+            strong += 1
+
+    if not agreements:
+        return None
+    agreement = sum(agreements) / len(agreements)
+    strong_fraction = strong / len(agreements)
+    verified = agreement >= 0.67 and strong_fraction >= 0.34
+    return {
+        "agreement": agreement,
+        "strong_fraction": strong_fraction,
+        "verified": verified,
+        "reference_fit": bank.reference_fit,
+        "reference_distinctiveness": bank.reference_distinctiveness,
+        "centre_anchor_confidence": 1.0,
+        "centre_anchor_count": centre_count,
+        "centre_ambiguity_allowed": False,
+        "centre_confidence_relaxed": False,
+    }
+
+
+# Make the hard centre invariant part of every serialized reconstruction candidate.
+# The worker already fixes centre ownership in its assignment matrix; this mirrors
+# that rule in the Python verifier so malformed or weak evidence cannot soften it.
+_reconstruct_module._reference_verification = _hard_centre_reference_verification
 
 
 def _reconstruct_wide(raw: bytes, tile_size: int, search_level: int = 0) -> dict:
@@ -140,7 +212,7 @@ def _solve_3x3_negotiated(raw: bytes, tile_size: int) -> dict:
 
     selected = _select_minmax(solved)
     selected["selection_reason"] = (
-        "canonical centre anchors; progressively relaxed tile-mapping confidence; "
+        "hard centre anchors at confidence 1.0; progressively relaxed non-centre tile-mapping confidence; "
         "mechanically valid solutions negotiated by min-max mapping confidence and move count"
     )
     selected["confidence_floor_reached"] = reached_floor
@@ -150,7 +222,10 @@ def _solve_3x3_negotiated(raw: bytes, tile_size: int) -> dict:
     selected["hypothesis_move_counts"] = [int(item.get("move_count", 0)) for item in solved]
     selected["hypothesis_mapping_qualities"] = [float(_mapping_quality(item)) for item in solved]
     selected["negotiation"] = negotiation
-    selected["centre_anchor_policy"] = "centre sticker is canonical and never reassigned"
+    selected["centre_anchor_policy"] = "centre sticker is canonical, confidence 1.0, never reassigned, never relaxed"
+    selected["centre_anchor_confidence"] = 1.0
+    selected["centre_confidence_relaxed"] = False
+    selected["centre_ambiguity_allowed"] = False
     return selected
 
 
