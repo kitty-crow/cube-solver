@@ -53,6 +53,9 @@ export class ReferenceAssistant extends BaseReferenceAssistant{
   selectedEvidence(){
     const evidence=super.selectedEvidence();
     if(!evidence)return null;
+    // v2 is the stable IndexedDB/Python wire format. mappingVersion below can
+    // advance independently as the cubemap editor gains stronger invariants.
+    evidence.version=2;
     const candidate=this.result?.candidates?.[this.selectedIndex];
     if(!candidate)return evidence;
 
