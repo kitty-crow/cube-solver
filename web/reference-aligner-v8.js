@@ -6,7 +6,6 @@ const GLOBAL_KEYS=new Set(["move","rotate","scale","yaw","pitch","roll"]);
 const TAU=Math.PI*2;
 
 const wrap=(v)=>{let x=Number(v||0)%TAU;if(x<0)x+=TAU;return x;};
-const wrapSigned=(v)=>{let x=Number(v||0)%TAU;if(x>Math.PI)x-=TAU;if(x< -Math.PI)x+=TAU;return x;};
 const clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
 const cloneOrientation=(value)=>({yaw:Number(value?.yaw||0),pitch:Number(value?.pitch||0),roll:Number(value?.roll||0)});
 const emptyWarp=()=>({points:Array.from({length:9},()=>[0,0])});
@@ -28,11 +27,6 @@ export class ReferenceAlignmentModal extends ConnectedReferenceAlignmentModal{
     const projection=draft?.projection||options.candidate?.projection||{};
     this.sourceScale=clamp(Number(draft?.sourceScale??projection.sourceScale??projection.orientation?.scale??1)||1,.05,20);
 
-    // 0.8.7-0.8.9 encoded translation/rotation/scale into per-face residuals.
-    // Those residuals are precisely what could smear/stall at a face boundary.
-    // Keep the user's global cube placement, but discard the obsolete affine
-    // face residuals when upgrading an old mapping. New local Warp refinements
-    // created by this version persist normally.
     if(Number(projection.mappingVersion||0)<5){
       this.faceWarps=Object.fromEntries(FACE_NAMES.map(face=>[face,emptyWarp()]));
       this.faceOrientations=Object.fromEntries(FACE_NAMES.map(face=>[face,cloneOrientation(this.orientation)]));
@@ -68,9 +62,6 @@ export class ReferenceAlignmentModal extends ConnectedReferenceAlignmentModal{
       ...payload,
       orientation,
       sourceScale:this.sourceScale,
-      // Translation/rotation/scale are properties of ONE wrapped reference,
-      // therefore every face shares the same rigid orientation. Only Warp is a
-      // face-local residual.
       faceOrientations:Object.fromEntries(FACE_NAMES.map(face=>[face,cloneOrientation(global)])),
       mappingVersion:5,
       topology:{
@@ -84,6 +75,7 @@ export class ReferenceAlignmentModal extends ConnectedReferenceAlignmentModal{
         fullSourceResampling:true,
         unboundedInteriorSampling:true,
         unboundedCubeRotation:true,
+        crossFaceContinuation:true,
       },
     };
   }
@@ -120,11 +112,11 @@ export class ReferenceAlignmentModal extends ConnectedReferenceAlignmentModal{
     if(!this.hintEl)return;
     const face=this.currentFace();
     if(this.mode==="global"){
-      this.hintEl.textContent="Drag continuously to move the complete reference around the cube. There is no ±90° wall: crossing a pole keeps rotating the full source. Pinch scales the global source and twist rotates it.";
+      this.hintEl.textContent="Drag continuously to move the complete reference around the cube. Pitch is truly continuous through 90°, 180°, 270° and further turns. Pinch scales the global source and twist rotates it.";
     }else if(this.isFaceLocked(face)){
       this.hintEl.textContent=`${FACE_LABELS[face]} is locked at its exact mapping. Unlock it before editing.`;
     }else{
-      this.hintEl.textContent="This face is a viewport onto the same complete wrapped image. Drag/pinch/twist move the whole cube wrap; only mesh-handle Warp is local to this face. Source pixels are always resampled from the full original image.";
+      this.hintEl.textContent="This face is a viewport onto the same complete wrapped image. Crossing a face edge continues onto its physical neighbour instead of approaching a face-local horizon. Only mesh-handle Warp is local to this face.";
     }
     this.updateLockControls();
   }
@@ -138,8 +130,6 @@ export class ReferenceAlignmentModal extends ConnectedReferenceAlignmentModal{
       this.statusEl.textContent=this.anyFaceLocked()?"A locked face anchors the cube pose. Unlock all faces before moving the wrap.":"Translation is disabled for the cube wrap.";
       return;
     }
-    // A drag on ANY face is a translation of the one global wrapped source, not
-    // a translation of a detached face crop.
     this.drag.kind="global";
     this.drag.orientation=cloneOrientation(this.orientation);
     this.drag.faceOrientations=cloneFaceOrientations(this.faceOrientations,this.orientation);
@@ -172,7 +162,11 @@ export class ReferenceAlignmentModal extends ConnectedReferenceAlignmentModal{
     const y=allowMove&&allowYaw?yawDelta:0;
     const p=allowMove&&allowPitch?pitchDelta:0;
     const r=allowRotate&&allowRoll?rollDelta:0;
-    this.orientation={yaw:wrap(base.yaw+y),pitch:wrapSigned(base.pitch+p),roll:wrap(base.roll+r)};
+    // DO NOT normalise pitch. A wrapped Euler angle is harmless mathematically,
+    // but it makes a continuous drag jump representation after a half-turn and
+    // can make the UI feel as though it has hit a pole. Keep the user's actual
+    // accumulated pitch and let sin/cos supply the periodic rotation.
+    this.orientation={yaw:wrap(base.yaw+y),pitch:base.pitch+p,roll:wrap(base.roll+r)};
     this.sourceScale=allowScale?clamp(Number(snapshot.sourceScale??this.sourceScale)*Number(scale||1),.05,20):Number(snapshot.sourceScale??this.sourceScale);
     this.faceOrientations=Object.fromEntries(FACE_NAMES.map(name=>[name,cloneOrientation(this.orientation)]));
     this.faceWarps=cloneWarps(snapshot.warps||this.faceWarps);
@@ -189,7 +183,7 @@ export class ReferenceAlignmentModal extends ConnectedReferenceAlignmentModal{
     const p=this.isTransformAllowed(face,"pitch")?pitchDelta:0;
     const r=this.isTransformAllowed(face,"roll")&&this.isTransformAllowed(face,"rotate")?rollDelta:0;
     if(!y&&!p&&!r)return false;
-    this.orientation={yaw:wrap(base.yaw+y),pitch:wrapSigned(base.pitch+p),roll:wrap(base.roll+r)};
+    this.orientation={yaw:wrap(base.yaw+y),pitch:base.pitch+p,roll:wrap(base.roll+r)};
     this.faceOrientations=Object.fromEntries(FACE_NAMES.map(name=>[name,cloneOrientation(this.orientation)]));
     this.changed();
     return true;
@@ -237,6 +231,6 @@ export class ReferenceAlignmentModal extends ConnectedReferenceAlignmentModal{
 
   updateReadout(){
     super.updateReadout();
-    if(this.readoutEl)this.readoutEl.textContent+=` · source ${this.sourceScale.toFixed(3)}× · full-source resampling · no face-edge clamp`;
+    if(this.readoutEl)this.readoutEl.textContent+=` · source ${this.sourceScale.toFixed(3)}× · cross-face continuation · no face-edge horizon`;
   }
 }
