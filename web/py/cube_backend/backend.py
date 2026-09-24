@@ -29,7 +29,6 @@ def _emit_progress(detail: str, progress: float) -> None:
     try:
         callback(str(detail), float(progress))
     except Exception:
-        # Progress reporting must never be able to break a solve.
         pass
 
 
@@ -95,6 +94,86 @@ def _solve_reconstruction_candidate(raw: bytes, tile_size: int, reconstruction: 
             "local_best": centre_fit["local_best"],
         },
         "picture_quality": _picture_quality(reconstruction),
+    }
+
+
+def _manual_identification(evidence) -> dict | None:
+    if not isinstance(evidence, dict):
+        return None
+    reference = evidence.get("reference_evidence")
+    if not isinstance(reference, dict):
+        return None
+    source = reference.get("reference")
+    if not isinstance(source, dict):
+        return None
+    manual = source.get("manual_identification")
+    if not isinstance(manual, dict) or not bool(manual.get("resolved")):
+        return None
+    state = manual.get("state")
+    if not isinstance(state, str) or len(state) != 54:
+        return None
+    rotations = manual.get("center_rotations")
+    if not isinstance(rotations, list) or len(rotations) != 6:
+        return None
+    return manual
+
+
+def _solve_manual_3x3(manual: dict) -> dict:
+    """Solve the exact scramble established by the interactive constraint solver.
+
+    This path deliberately does not rerun fuzzy sticker reassignment. The
+    reference alignment supplied the centres and the manual/CSP stage supplied
+    one unique mechanically legal cubie state.
+    """
+    from rubik_solver import Cube, solve
+
+    if not _SOLVER_READY:
+        warm_solver()
+
+    state = str(manual["state"])
+    cube = Cube.from_string(state)
+    valid = cube.verify()
+    if valid is not True:
+        raise ValueError(f"Manually identified cube is not legal: {valid}")
+
+    _emit_progress("Solving the uniquely identified cube state…", 0.972)
+    solution = solve(cube)
+    if solution is None:
+        raise RuntimeError("Two-phase solver could not solve the identified state")
+    if not isinstance(solution, str):
+        solution = " ".join(str(x) for x in solution)
+    solution = solution.strip()
+
+    check = Cube.from_string(state)
+    if solution:
+        check.move(solution)
+    if not check.is_solved():
+        raise RuntimeError("Solver returned a sequence that did not solve the identified state")
+
+    center_rotations = tuple(int(value) % 4 for value in manual.get("center_rotations", [0] * 6))
+    remaining_centres = centres_after_solution(center_rotations, solution)
+    centre_algs = centre_correction(remaining_centres)
+    centre_tokens = simplify_moves(" ".join(centre_algs))
+    full_tokens = simplify_moves(solution.split() + centre_tokens)
+    confirmed = manual.get("confirmed") if isinstance(manual.get("confirmed"), dict) else {}
+
+    return {
+        "state": state,
+        "center_rotations": list(center_rotations),
+        "solution": solution,
+        "centre_solution": " ".join(centre_tokens),
+        "moves": full_tokens,
+        "move_count": len(full_tokens),
+        "cubie_move_count": len(solution.split()) if solution else 0,
+        "centre_move_count": len(centre_tokens),
+        "remaining_centres_before_correction": remaining_centres,
+        "confidence": 1.0,
+        "manual_identification": True,
+        "manual_confirmed_stickers": len(confirmed),
+        "manual_inferred_stickers": 48 - len(confirmed),
+        "legal_state_count": 1,
+        "selection_reason": "unique legal scramble from hard user confirmations plus exact cube-constraint propagation",
+        "centre_anchor_policy": "centres inherited from solved-reference alignment; identities are never reassigned",
     }
 
 
@@ -181,6 +260,7 @@ def _reference_summary(evidence) -> dict | None:
     face_order = source.get("face_order")
     if not isinstance(face_order, list) or len(face_order) != 6:
         face_order = list(FACE_NAMES)
+    manual = source.get("manual_identification") if isinstance(source.get("manual_identification"), dict) else None
     return {
         "subject": reference.get("subject"),
         "fit": reference.get("fit"),
@@ -200,6 +280,8 @@ def _reference_summary(evidence) -> dict | None:
         "source_overlap_fraction": float(source.get("source_overlap_fraction", 0.0) or 0.0),
         "face_domain_clipped_fraction": float(source.get("face_domain_clipped_fraction", 0.0) or 0.0),
         "centre_alignment": source.get("centre_alignment"),
+        "manual_identification_resolved": bool(manual and manual.get("resolved")),
+        "manual_confirmed_stickers": len(manual.get("confirmed", {})) if manual else 0,
     }
 
 
@@ -218,7 +300,12 @@ def solve_scan(payload_json: str) -> str:
             from .pocket import solve_scan_2x2
             result = solve_scan_2x2(raw, tile_size)
         elif size == 3:
-            result = _solve_3x3(raw, tile_size)
+            manual = _manual_identification(evidence)
+            if manual is not None:
+                _emit_progress("Using confirmed sticker identities and exact cube constraints…", 0.955)
+                result = _solve_manual_3x3(manual)
+            else:
+                result = _solve_3x3(raw, tile_size)
         elif size == 4:
             _emit_progress("Reconstructing centres and wings…", 0.955)
             from . import bigcube
