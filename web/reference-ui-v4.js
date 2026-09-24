@@ -1,5 +1,5 @@
 import { ReferenceAssistant as BaseReferenceAssistant } from "./reference-ui-v3.js";
-import { ReferenceAlignmentModal } from "./reference-aligner.js";
+import { ReferenceAlignmentModal } from "./reference-aligner-v2.js";
 
 function installLaunchStyles(){
   if(document.querySelector("#reference-aligner-launch-styles"))return;
@@ -86,12 +86,12 @@ export class ReferenceAssistant extends BaseReferenceAssistant{
     const editable=Boolean(candidate?.usable&&candidate?.projection?.editable&&candidate.projection.kind==="equirectangular"&&this.lastPayload);
     tools.hidden=!editable;
     if(!editable)return;
-    button.textContent=candidate.projection.manual?"Refine manual alignment":"Adjust wrapped reference";
+    button.textContent=candidate.projection.manual?"Refine artwork mapping":"Adjust artwork mapping";
     const d=candidate.manualDiagnostics;
     if(d){
       note.textContent=`Manual correction ${Number(d.angularErrorDeg||0).toFixed(1)}° · centre margin ${(Number(d.corrected?.centreMargin||0)*100).toFixed(1)}% (auto ${(Number(d.automatic?.centreMargin||0)*100).toFixed(1)}%)`;
     }else{
-      note.textContent="Overlay the reference on the photographed cube, rotate it globally, then warp individual faces.";
+      note.textContent="Overlay the reference artwork on the photographed cube, move and rotate it continuously, then warp individual faces where needed.";
     }
   }
 
