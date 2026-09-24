@@ -32,6 +32,13 @@ function txDone(tx){
   });
 }
 
+function requestValue(request,fallback=null){
+  return new Promise((resolve,reject)=>{
+    request.onsuccess=()=>resolve(request.result??fallback);
+    request.onerror=()=>reject(request.error||new Error("Reference-session request failed"));
+  });
+}
+
 async function fetchReferenceBlob(url){
   if(!url)return null;
   try{
@@ -44,8 +51,17 @@ async function fetchReferenceBlob(url){
 function cloneCandidate(candidate){
   if(!candidate)return null;
   const copy=structuredClone(candidate);
+  // Blob URLs die with the browsing document. The actual image bytes are stored
+  // separately in IndexedDB and a fresh object URL is created on restore.
   if(String(copy.thumbnailUrl||"").startsWith("blob:"))copy.thumbnailUrl="";
   return copy;
+}
+
+async function readCurrent(db){
+  const tx=db.transaction(STORE,"readonly");
+  const record=await requestValue(tx.objectStore(STORE).get("current"),null);
+  await txDone(tx);
+  return record;
 }
 
 export async function saveReferenceSession({payload,result,selectedIndex,candidate,draft=null,editorState=null}){
@@ -53,20 +69,22 @@ export async function saveReferenceSession({payload,result,selectedIndex,candida
   let db;
   try{
     db=await openDb();
-    const tx=db.transaction(STORE,"readwrite"),store=tx.objectStore(STORE);
-    const existing=await new Promise((resolve)=>{
-      const request=store.get("current");
-      request.onsuccess=()=>resolve(request.result||null);
-      request.onerror=()=>resolve(null);
-    });
+    const fingerprint=referenceFingerprint(payload);
+
+    // Do not keep a read/write IndexedDB transaction open across a network
+    // fetch. Browsers are allowed to auto-commit an idle transaction while the
+    // fetch is pending, which previously made autosaves intermittently vanish
+    // with TransactionInactiveError on reload.
+    const existing=await readCurrent(db).catch(()=>null);
     const candidateCopy=cloneCandidate(candidate);
     const remoteThumbnail=String(candidate?.thumbnailUrl||candidate?.sourceUrl||"");
-    let referenceBlob=existing?.fingerprint===referenceFingerprint(payload)?existing.referenceBlob:null;
+    let referenceBlob=existing?.fingerprint===fingerprint?existing.referenceBlob:null;
     if(!referenceBlob)referenceBlob=await fetchReferenceBlob(remoteThumbnail);
-    store.put({
+
+    const record={
       key:"current",
-      version:1,
-      fingerprint:referenceFingerprint(payload),
+      version:2,
+      fingerprint,
       size:Number(payload.size||0),
       subject:String(result?.subject||""),
       guesses:structuredClone(result?.guesses||[]),
@@ -75,11 +93,14 @@ export async function saveReferenceSession({payload,result,selectedIndex,candida
       selectedIndex:Number.isInteger(selectedIndex)?selectedIndex:0,
       candidate:candidateCopy,
       remoteThumbnail:remoteThumbnail.startsWith("blob:")?String(existing?.remoteThumbnail||""):remoteThumbnail,
-      referenceBlob,
+      referenceBlob:referenceBlob||null,
       draft:structuredClone(draft||null),
       editorState:structuredClone(editorState||null),
       savedAt:Date.now(),
-    });
+    };
+
+    const tx=db.transaction(STORE,"readwrite");
+    tx.objectStore(STORE).put(record);
     await txDone(tx);
     return true;
   }finally{db?.close?.();}
@@ -90,11 +111,7 @@ export async function loadReferenceSession(payload){
   let db;
   try{
     db=await openDb();
-    const tx=db.transaction(STORE,"readonly"),request=tx.objectStore(STORE).get("current");
-    const record=await new Promise((resolve,reject)=>{
-      request.onsuccess=()=>resolve(request.result||null);
-      request.onerror=()=>reject(request.error||new Error("Could not read reference session"));
-    });
+    const record=await readCurrent(db);
     if(!record||record.fingerprint!==referenceFingerprint(payload)||Number(record.size)!==Number(payload.size))return null;
     return record;
   }finally{db?.close?.();}
