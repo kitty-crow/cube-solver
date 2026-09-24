@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import json
+from itertools import product
 
 from .centres import CUBE_ROTATIONS, centre_correction, centres_after_solution, simplify_moves
 from .centre_fit import fit_reachable_centres
@@ -112,18 +113,155 @@ def _manual_identification(evidence) -> dict | None:
     state = manual.get("state")
     if not isinstance(state, str) or len(state) != 54:
         return None
-    rotations = manual.get("center_rotations")
-    if not isinstance(rotations, list) or len(rotations) != 6:
-        return None
     return manual
 
 
-def _solve_manual_3x3(manual: dict) -> dict:
-    """Solve the exact scramble established by the interactive constraint solver.
+def _manual_reconstruction_for_centre_fit(manual: dict) -> dict | None:
+    """Recover edge geometry from the sticker CSP's resolved placements.
 
-    This path deliberately does not rerun fuzzy sticker reassignment. The
-    reference alignment supplied the centres and the manual/CSP stage supplied
-    one unique mechanically legal cubie state.
+    Centre fitting only needs the twelve resolved edge cubies. The CSP stores
+    the exact target facelet and quarter-turn for every photographed sticker,
+    so this conversion is deterministic and does not reopen fuzzy assignment.
+    """
+    raw_placements = manual.get("placements")
+    if not isinstance(raw_placements, dict):
+        return None
+
+    placements: dict[int, tuple[int, int]] = {}
+    for raw_tile, value in raw_placements.items():
+        if not isinstance(value, dict):
+            continue
+        try:
+            tile = int(raw_tile)
+            target = int(value["target"])
+            rotation = int(value.get("rotation", 0)) % 4
+        except (KeyError, TypeError, ValueError):
+            continue
+        placements[tile] = (target, rotation)
+
+    edges = []
+    for current in range(12):
+        matches = []
+        for home in range(12):
+            for candidate in EDGE_GEOM[current][home]:
+                if all(
+                    placements.get(placement.tile)
+                    == (int(placement.target_facelet), int(placement.rot) % 4)
+                    for placement in candidate.placements
+                ):
+                    matches.append(candidate)
+        if len(matches) != 1:
+            return None
+        candidate = matches[0]
+        edges.append({
+            "current": int(candidate.current_pos),
+            "home": int(candidate.home_pos),
+            "orientation": int(candidate.eo),
+        })
+
+    return {"state": str(manual.get("state", "")), "edges": edges}
+
+
+def _quarter_turn_distance(a: int, b: int) -> int:
+    delta = (int(a) - int(b)) % 4
+    return min(delta, 4 - delta)
+
+
+def _preferred_center_rotations(manual: dict) -> list[int]:
+    rotations = manual.get("center_rotations")
+    if not isinstance(rotations, list) or len(rotations) != 6:
+        return [0] * 6
+    return [int(value) % 4 for value in rotations]
+
+
+def _nearest_reachable_center_rotations(preferred, solution: str) -> list[int]:
+    """Project a noisy centre-orientation guess onto the physical 3×3 group.
+
+    A centre-image alignment is evidence, not a licence to reject an otherwise
+    legal and strongly identified cube. Search all 4^6 centre orientations and
+    retain the closest one whose post-solution centre state is actually
+    reachable by the picture-centre algorithms.
+    """
+    wanted = [int(value) % 4 for value in list(preferred)[:6]]
+    wanted += [0] * (6 - len(wanted))
+    best = None
+    best_key = None
+    for candidate in product(range(4), repeat=6):
+        remaining = centres_after_solution(list(candidate), solution)
+        if sum(int(value) for value in remaining) % 2:
+            continue
+        distance = sum(_quarter_turn_distance(candidate[i], wanted[i]) for i in range(6))
+        changed = sum(candidate[i] != wanted[i] for i in range(6))
+        key = (distance, changed, candidate)
+        if best_key is None or key < best_key:
+            best_key = key
+            best = candidate
+    if best is None:
+        raise RuntimeError("Could not construct a physically reachable centre orientation")
+    return list(best)
+
+
+def _fit_manual_center_rotations(raw: bytes, tile_size: int, manual: dict, solution: str) -> dict:
+    preferred = _preferred_center_rotations(manual)
+    reconstruction = _manual_reconstruction_for_centre_fit(manual)
+    if reconstruction is not None:
+        try:
+            fitted = fit_reachable_centres(raw, tile_size, reconstruction, solution)
+            rotations = [int(value) % 4 for value in fitted["rotations"]]
+            return {
+                "rotations": rotations,
+                "score": fitted.get("score"),
+                "adjusted_faces": list(fitted.get("adjusted_faces", [])),
+                "local_best": list(fitted.get("local_best", preferred)),
+                "source": "scan-and-reference-fit",
+            }
+        except Exception:
+            # The identified cubie state remains authoritative. Older saved jobs
+            # may not contain enough placement metadata for the richer fit.
+            pass
+
+    rotations = _nearest_reachable_center_rotations(preferred, solution)
+    return {
+        "rotations": rotations,
+        "score": None,
+        "adjusted_faces": [i for i in range(6) if rotations[i] != preferred[i]],
+        "local_best": preferred,
+        "source": "nearest-physical-orientation",
+    }
+
+
+def _manual_result_metadata(manual: dict) -> dict:
+    exact = bool(manual.get("exact", manual.get("resolution_kind") == "unique"))
+    default_confidence = 1.0 if exact else 0.0
+    try:
+        confidence = max(0.0, min(1.0, float(manual.get("confidence", default_confidence))))
+    except (TypeError, ValueError):
+        confidence = default_confidence
+    try:
+        legal_state_count = max(1, int(manual.get("legal_state_count", 1)))
+    except (TypeError, ValueError):
+        legal_state_count = 1
+    confirmed = manual.get("confirmed") if isinstance(manual.get("confirmed"), dict) else {}
+    ambiguous = manual.get("ambiguous") if isinstance(manual.get("ambiguous"), dict) else {}
+    inferred = max(0, 48 - len(confirmed) - len(ambiguous))
+    return {
+        "exact": exact,
+        "confidence": confidence,
+        "legal_state_count": legal_state_count,
+        "resolution_kind": str(manual.get("resolution_kind") or ("unique" if exact else "probable")),
+        "confirmed_count": len(confirmed),
+        "ambiguous_count": len(ambiguous),
+        "inferred_count": inferred,
+    }
+
+
+def _solve_manual_3x3(raw: bytes, tile_size: int, manual: dict) -> dict:
+    """Solve the legal cubie state selected by the interactive constraint solver.
+
+    Hard user assignments and the cubie CSP determine the scramble. Centre
+    identities remain hard anchors, while their quarter-turn orientations are
+    fitted to the nearest physically reachable picture-centre state rather than
+    being allowed to invalidate an otherwise legal high-confidence scramble.
     """
     from rubik_solver import Cube, solve
 
@@ -134,9 +272,11 @@ def _solve_manual_3x3(manual: dict) -> dict:
     cube = Cube.from_string(state)
     valid = cube.verify()
     if valid is not True:
-        raise ValueError(f"Manually identified cube is not legal: {valid}")
+        raise ValueError(f"Identified cube is not legal: {valid}")
 
-    _emit_progress("Solving the uniquely identified cube state…", 0.972)
+    metadata = _manual_result_metadata(manual)
+    confidence_label = f"{round(metadata['confidence'] * 100)}%" if not metadata["exact"] else "unique"
+    _emit_progress(f"Solving the identified legal cube state ({confidence_label})…", 0.972)
     solution = solve(cube)
     if solution is None:
         raise RuntimeError("Two-phase solver could not solve the identified state")
@@ -150,16 +290,24 @@ def _solve_manual_3x3(manual: dict) -> dict:
     if not check.is_solved():
         raise RuntimeError("Solver returned a sequence that did not solve the identified state")
 
-    center_rotations = tuple(int(value) % 4 for value in manual.get("center_rotations", [0] * 6))
+    centre_fit = _fit_manual_center_rotations(raw, tile_size, manual, solution)
+    center_rotations = list(centre_fit["rotations"])
     remaining_centres = centres_after_solution(center_rotations, solution)
     centre_algs = centre_correction(remaining_centres)
     centre_tokens = simplify_moves(" ".join(centre_algs))
     full_tokens = simplify_moves(solution.split() + centre_tokens)
-    confirmed = manual.get("confirmed") if isinstance(manual.get("confirmed"), dict) else {}
+
+    if metadata["exact"]:
+        selection_reason = "unique legal scramble from hard user confirmations plus exact cube-constraint propagation"
+    else:
+        selection_reason = (
+            "highest-confidence legal scramble from hard confirmations, ambiguous hints, image evidence, "
+            "cubie adjacency/orientation and exact cube constraints"
+        )
 
     return {
         "state": state,
-        "center_rotations": list(center_rotations),
+        "center_rotations": center_rotations,
         "solution": solution,
         "centre_solution": " ".join(centre_tokens),
         "moves": full_tokens,
@@ -167,13 +315,17 @@ def _solve_manual_3x3(manual: dict) -> dict:
         "cubie_move_count": len(solution.split()) if solution else 0,
         "centre_move_count": len(centre_tokens),
         "remaining_centres_before_correction": remaining_centres,
-        "confidence": 1.0,
+        "centre_fit": centre_fit,
+        "confidence": metadata["confidence"],
         "manual_identification": True,
-        "manual_confirmed_stickers": len(confirmed),
-        "manual_inferred_stickers": 48 - len(confirmed),
-        "legal_state_count": 1,
-        "selection_reason": "unique legal scramble from hard user confirmations plus exact cube-constraint propagation",
-        "centre_anchor_policy": "centres inherited from solved-reference alignment; identities are never reassigned",
+        "manual_identification_exact": metadata["exact"],
+        "manual_resolution_kind": metadata["resolution_kind"],
+        "manual_confirmed_stickers": metadata["confirmed_count"],
+        "manual_ambiguous_stickers": metadata["ambiguous_count"],
+        "manual_inferred_stickers": metadata["inferred_count"],
+        "legal_state_count": metadata["legal_state_count"],
+        "selection_reason": selection_reason,
+        "centre_anchor_policy": "centre identities are fixed by reference alignment; centre rotations are projected onto the physically reachable picture-cube group",
     }
 
 
@@ -281,6 +433,8 @@ def _reference_summary(evidence) -> dict | None:
         "face_domain_clipped_fraction": float(source.get("face_domain_clipped_fraction", 0.0) or 0.0),
         "centre_alignment": source.get("centre_alignment"),
         "manual_identification_resolved": bool(manual and manual.get("resolved")),
+        "manual_identification_exact": bool(manual and manual.get("exact")),
+        "manual_identification_confidence": float(manual.get("confidence", 0.0) or 0.0) if manual else None,
         "manual_confirmed_stickers": len(manual.get("confirmed", {})) if manual else 0,
     }
 
@@ -302,8 +456,11 @@ def solve_scan(payload_json: str) -> str:
         elif size == 3:
             manual = _manual_identification(evidence)
             if manual is not None:
-                _emit_progress("Using confirmed sticker identities and exact cube constraints…", 0.955)
-                result = _solve_manual_3x3(manual)
+                confidence = float(manual.get("confidence", 1.0) or 0.0)
+                exact = bool(manual.get("exact"))
+                label = "unique" if exact else f"{round(confidence * 100)}% confidence"
+                _emit_progress(f"Using the identified legal cube state ({label})…", 0.955)
+                result = _solve_manual_3x3(raw, tile_size, manual)
             else:
                 result = _solve_3x3(raw, tile_size)
         elif size == 4:
