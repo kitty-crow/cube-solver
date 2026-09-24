@@ -1,6 +1,6 @@
 import { loadScan } from "./scan-store.js";
 import { buildPayloadFromCaptures } from "./scan-geometry.js";
-import { ReferenceAssistant } from "./reference-ui-v2.js";
+import { ReferenceAssistant } from "./reference-ui-v3.js";
 
 const TILE_SIZE = 48;
 const ROUNDED_SETTING = "picture-cube-rounded-cubies";
@@ -96,6 +96,14 @@ window.addEventListener("picture-image-memory-cleared", () => {
   assistant.invalidate();
   assistant.panel.hidden = true;
 });
+window.addEventListener("picture-reference-ready", () => {
+  if (!assistant.selectedEvidence()) return;
+  allowSolve = true;
+  failedSubject = "";
+  hideSemanticProgress();
+  solveButton.disabled = false;
+  solveButton.textContent = "Solve with reference";
+});
 setTimeout(refreshAvailability, 250);
 
 assistant.subjectEl.addEventListener("input", () => {
@@ -106,14 +114,11 @@ assistant.searchButton.addEventListener("click", () => {
   allowSolve = false;
   failedSubject = "";
 });
-assistant.candidatesEl.addEventListener("click", () => {
-  queueMicrotask(() => { if (assistant.selectedEvidence()) allowSolve = true; });
-});
 
 solveButton.addEventListener("click", (event) => {
   const currentSubject = assistant.subjectEl.value.trim();
   const subjectMatches = !currentSubject || currentSubject === assistant.lastSubject || currentSubject === failedSubject;
-  if (allowSolve && subjectMatches) {
+  if (allowSolve && subjectMatches && assistant.selectedEvidence()) {
     allowSolve = false;
     hideSemanticProgress();
     assistant.persistSelected().catch(() => {});
@@ -124,9 +129,15 @@ solveButton.addEventListener("click", (event) => {
   event.stopImmediatePropagation();
   if (analysing) return;
 
+  if (assistant.result && assistant.lastKey && subjectMatches && !assistant.selectedEvidence()) {
+    solveButton.textContent = "Choose a reference";
+    assistant.panel.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    return;
+  }
+
   analysing = true;
   solveButton.disabled = true;
-  solveButton.textContent = "Identifying artwork…";
+  solveButton.textContent = "Finding artwork…";
   assistant.panel.hidden = false;
   semanticProgress("Recognising six faces…", 0.01);
 
@@ -138,12 +149,12 @@ solveButton.addEventListener("click", (event) => {
     const result = await assistant.analyse(payload, currentSubject);
     analysedKey = key;
     failedSubject = "";
-    allowSolve = true;
-    solveButton.textContent = assistant.selectedEvidence() ? "Solve with reference" : "Solve without reference";
+    allowSolve = Boolean(assistant.selectedEvidence());
+    solveButton.textContent = allowSolve ? "Solve with reference" : "Choose a reference";
     assistant.panel.scrollIntoView({ behavior: "smooth", block: "nearest" });
     return result;
   })().catch((error) => {
-    console.warn("Semantic reference analysis failed", error);
+    console.warn("Semantic reference search failed", error);
     failedSubject = currentSubject;
     allowSolve = true;
     solveButton.textContent = "Solve without reference";
