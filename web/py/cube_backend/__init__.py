@@ -71,10 +71,19 @@ def _hard_centre_reference_verification(bank, edges, corners, center_rots):
 _reconstruct_module._reference_verification = _hard_centre_reference_verification
 
 
+def _pass_base(level: int) -> float:
+    return 0.943 + max(0, min(2, int(level))) * 0.015
+
+
 def _reconstruct_wide(raw: bytes, tile_size: int, search_level: int = 0) -> dict:
     """Reference-first reconstruction with progressively wider legal beams."""
     bank = _reconstruct_module.TileBank(raw, tile_size)
     level = max(0, min(2, int(search_level)))
+    base = _pass_base(level)
+    _backend._emit_progress(
+        f"Search pass {level + 1}/3 · generating legal picture mappings…",
+        base,
+    )
     if bank.has_reference:
         beams = ((4, 12, 6, 32), (6, 20, 9, 64), (8, 28, 12, 96))
     else:
@@ -83,9 +92,16 @@ def _reconstruct_wide(raw: bytes, tile_size: int, search_level: int = 0) -> dict
     invariant = _reconstruct_module._best_edges(
         _reconstruct_module._score_edge_matrix_rotation_invariant(bank), keep=seed_keep
     )
+    seed_total = sum(len(values) for values in invariant.values()) or 1
+    seed_index = 0
     seen = {}
     for seed_parity, seed_values in invariant.items():
         for _, seed_path in seed_values:
+            seed_index += 1
+            _backend._emit_progress(
+                f"Search pass {level + 1}/3 · expanding mapping seed {seed_index}/{seed_total}…",
+                base + 0.005 * seed_index / seed_total,
+            )
             centre_rots = _reconstruct_module._refine_center_rots(bank, seed_path, (0, 0, 0, 0, 0, 0))
             edge_by_parity = _reconstruct_module._best_edges(
                 _reconstruct_module._score_edge_matrix(bank, centre_rots), keep=edge_keep
@@ -105,6 +121,10 @@ def _reconstruct_wide(raw: bytes, tile_size: int, search_level: int = 0) -> dict
     legal = sorted(seen.values(), key=lambda item: item[0], reverse=True)
     if not legal:
         raise ValueError("Could not reconstruct a legal cube state")
+    _backend._emit_progress(
+        f"Search pass {level + 1}/3 · ranked {len(legal)} legal mappings…",
+        base + 0.006,
+    )
     scores = [item[0] for item in legal]
     result = _reconstruct_module._serialize_candidate(legal[0], bank, scores)
     result["hypotheses_considered"] = len(legal)
@@ -178,23 +198,40 @@ def _solve_3x3_negotiated(raw: bytes, tile_size: int) -> dict:
         candidates.sort(key=lambda item: (_mapping_quality(item), float(item.get("score", 0.0))), reverse=True)
         best = _mapping_quality(candidates[0]) if candidates else 0.0
         solved_before = len(solved)
+        floors = _confidence_floors(best)
+        base = _pass_base(level)
 
-        for floor in _confidence_floors(best):
+        for floor_index, floor in enumerate(floors):
             reached_floor = min(reached_floor, floor)
             eligible = [item for item in candidates if _mapping_quality(item) + 1e-12 >= floor]
-            for candidate in eligible:
+            floor_progress = base + 0.0065 + 0.0065 * (floor_index / max(1, len(floors)))
+            _backend._emit_progress(
+                f"Search pass {level + 1}/3 · confidence ≥ {floor * 100:.0f}% · {len(eligible)} mapping(s) to test…",
+                floor_progress,
+            )
+            eligible_new = [item for item in eligible if item.get("state") and item.get("state") not in attempted]
+            for candidate_index, candidate in enumerate(eligible_new):
                 state = candidate.get("state")
                 if not state or state in attempted:
                     continue
                 if len(solved) - solved_before >= 18:
                     break
                 attempted.add(state)
+                local = (candidate_index + 1) / max(1, len(eligible_new))
+                _backend._emit_progress(
+                    f"Search pass {level + 1}/3 · solving legal mapping {candidate_index + 1}/{len(eligible_new)} · {len(solved)} valid so far…",
+                    min(base + 0.0135, floor_progress + 0.0012 * local),
+                )
                 try:
                     item = _backend._solve_reconstruction_candidate(raw, tile_size, candidate)
                     item["hypothesis_index"] = len(attempted) - 1
                     item["search_level"] = level
                     item["confidence_floor"] = floor
                     solved.append(item)
+                    _backend._emit_progress(
+                        f"Search pass {level + 1}/3 · found {len(solved)} legal solution(s), continuing comparison…",
+                        min(base + 0.0137, floor_progress + 0.0014),
+                    )
                 except Exception:
                     continue
             negotiation.append({
@@ -217,6 +254,14 @@ def _solve_3x3_negotiated(raw: bytes, tile_size: int) -> dict:
     if not solved:
         raise RuntimeError("No legal tile mapping produced a valid solution after relaxing image confidence")
 
+    _backend._emit_progress(
+        f"Comparing {len(solved)} legal solution(s) against the wrapped reference…",
+        0.987,
+    )
+    _backend._emit_progress(
+        "Balancing picture match against move count…",
+        0.989,
+    )
     selected = _select_minmax(solved)
     verification = selected.get("picture_verification") if isinstance(selected.get("picture_verification"), dict) else None
     selected["selection_reason"] = (
@@ -248,5 +293,6 @@ _backend._solve_3x3 = _solve_3x3_negotiated
 reconstruct = _reconstruct_wide
 solve_scan = _backend.solve_scan
 warm_solver = _backend.warm_solver
+set_progress_callback = _backend.set_progress_callback
 
-__all__ = ["reconstruct", "solve_scan", "warm_solver"]
+__all__ = ["reconstruct", "solve_scan", "warm_solver", "set_progress_callback"]
