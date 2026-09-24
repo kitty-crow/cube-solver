@@ -1,0 +1,20 @@
+.work-actions {
+  display: flex;
+  gap: .5rem;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+@media (max-width: 720px) {
+  .section-heading {
+    align-items: stretch;
+    flex-direction: column;
+  }
+  .work-actions {
+    justify-content: stretch;
+  }
+  .work-actions .pages-button {
+    flex: 1 1 9rem;
+    justify-content: center;
+  }
+}
