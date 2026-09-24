@@ -46,6 +46,11 @@ function hideSemanticProgress() {
   solveProgressTrack.setAttribute("aria-valuenow", "0");
 }
 
+function updateReferenceSolveLabel() {
+  if (!assistant.selectedEvidence()) return;
+  solveButton.textContent = assistant.identificationResolved?.() ? "Solve identified cube" : "Identify stickers";
+}
+
 const assistant = new ReferenceAssistant({
   onStatus(detail, progress) {
     if (workerStatus && detail) workerStatus.textContent = detail;
@@ -87,7 +92,7 @@ async function refreshAvailability() {
       allowSolve = Boolean(assistant.selectedEvidence());
       failedSubject = "";
       solveButton.disabled = false;
-      solveButton.textContent = allowSolve ? "Solve with reference" : "Choose a reference";
+      updateReferenceSolveLabel();
       hideSemanticProgress();
       return;
     }
@@ -125,7 +130,14 @@ window.addEventListener("picture-reference-ready", () => {
   failedSubject = "";
   hideSemanticProgress();
   solveButton.disabled = false;
-  solveButton.textContent = "Solve with reference";
+  updateReferenceSolveLabel();
+});
+window.addEventListener("picture-stickers-resolved", () => {
+  allowSolve = true;
+  hideSemanticProgress();
+  solveButton.disabled = false;
+  solveButton.textContent = "Solve identified cube";
+  workerStatus.textContent = "Unique legal scramble identified";
 });
 setTimeout(refreshAvailability, 250);
 
@@ -141,7 +153,18 @@ assistant.searchButton.addEventListener("click", () => {
 solveButton.addEventListener("click", (event) => {
   const currentSubject = assistant.subjectEl.value.trim();
   const subjectMatches = !currentSubject || currentSubject === assistant.lastSubject || currentSubject === failedSubject;
-  if (allowSolve && subjectMatches && assistant.selectedEvidence()) {
+  const evidence = assistant.selectedEvidence();
+  if (allowSolve && subjectMatches && evidence) {
+    if (Number(assistant.lastPayload?.size) === 3 && !assistant.identificationResolved?.()) {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      solveButton.textContent = "Identify stickers";
+      assistant.openStickerIdentification().catch((error) => {
+        console.warn("Could not open sticker identification", error);
+        workerStatus.textContent = error instanceof Error ? error.message : String(error);
+      });
+      return;
+    }
     allowSolve = false;
     hideSemanticProgress();
     assistant.persistSelected().catch(() => {});
@@ -174,7 +197,7 @@ solveButton.addEventListener("click", (event) => {
     restoreAttemptedKey = key;
     failedSubject = "";
     allowSolve = Boolean(assistant.selectedEvidence());
-    solveButton.textContent = allowSolve ? "Solve with reference" : "Choose a reference";
+    if (allowSolve) updateReferenceSolveLabel(); else solveButton.textContent = "Choose a reference";
     assistant.panel.scrollIntoView({ behavior: "smooth", block: "nearest" });
     return result;
   })().catch((error) => {
