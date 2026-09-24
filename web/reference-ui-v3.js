@@ -49,7 +49,7 @@ export class ReferenceAssistant extends BaseReferenceAssistant {
 
   ensureWorker() {
     if (this.worker) return this.worker;
-    this.worker = new Worker(new URL("./reference-v4-worker.js", import.meta.url), { type: "module" });
+    this.worker = new Worker(new URL("./reference-v5-worker.js", import.meta.url), { type: "module" });
     this.worker.addEventListener("message", (event) => {
       const msg = event.data || {};
       if (msg.type === "reference-status") {
@@ -247,7 +247,7 @@ export class ReferenceAssistant extends BaseReferenceAssistant {
     } else if (selected?.usable && selected.evidence) {
       this.statusEl.textContent = `Using ${selected.title.replace(/^File:/, "")} · ${(selected.fit * 100).toFixed(0)}% sticker fit`;
     } else {
-      this.statusEl.textContent = `${result.candidates?.length || 0} references found · choose one to match`;
+      this.statusEl.textContent = `${result.candidates?.length || 0} references found · choose one`;
     }
 
     this.sixGrid.textContent = "";
@@ -263,10 +263,10 @@ export class ReferenceAssistant extends BaseReferenceAssistant {
       }
       const anchors = selected.alignment?.anchors || [];
       if (anchors.length) {
-        const mapping = anchors.map((item) => `${item.target}←${item.source} ${(Number(item.score || 0) * 100).toFixed(0)}%`).join(" · ");
+        const mapping = anchors.map((item) => `${item.target} ${(Number(item.score || 0) * 100).toFixed(0)}%`).join(" · ");
         const margin = Number(selected.alignment?.margin || 0);
         line.hidden = false;
-        line.textContent = `Fixed-centre alignment: ${mapping}${Number.isFinite(margin) ? ` · margin ${(margin * 100).toFixed(1)}%` : ""}`;
+        line.textContent = `Fixed centres locked: ${mapping}${Number.isFinite(margin) ? ` · mean margin ${(margin * 100).toFixed(1)}%` : ""}`;
       } else {
         line.hidden = true;
       }
@@ -301,10 +301,10 @@ export class ReferenceAssistant extends BaseReferenceAssistant {
       title.textContent = String(candidate.title || "Reference").replace(/^File:/, "");
       const meta = document.createElement("span");
       meta.className = "reference-card__meta";
-      if (index === this.matchingIndex) meta.textContent = "matching selected image…";
+      if (index === this.matchingIndex) meta.textContent = "aligning selected image…";
       else if (candidate.usable && candidate.evidence) meta.textContent = `${candidate.layout} · ${(candidate.fit * 100).toFixed(0)}%`;
       else if (candidate.usable === false) meta.textContent = candidate.reason || "not usable";
-      else meta.textContent = "tap to match against cube";
+      else meta.textContent = "select this reference";
       const licence = document.createElement("span");
       licence.className = "reference-card__meta";
       licence.textContent = candidate.licence || "Wikimedia Commons";
