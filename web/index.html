@@ -98,7 +98,12 @@
     <section class="review-section" aria-labelledby="review-title">
       <div class="section-heading">
         <h2 id="review-title">Captured faces</h2>
-        <button id="clear-image-memory" class="pages-button pages-button--quiet" type="button">Clear image memory</button>
+        <div class="work-actions">
+          <button id="download-work" class="pages-button pages-button--quiet" type="button">Download work</button>
+          <button id="load-work" class="pages-button pages-button--quiet" type="button">Load work</button>
+          <input id="load-work-file" type="file" accept=".cube,application/gzip" hidden>
+          <button id="clear-image-memory" class="pages-button pages-button--quiet" type="button">Clear image memory</button>
+        </div>
       </div>
       <div id="review-grid" class="review-grid"><p class="review-empty">No captures yet.</p></div>
     </section>
@@ -133,5 +138,6 @@
   <script type="module" src="./solve-status-ui.js"></script>
   <script type="module" src="./scan-guide.js"></script>
   <script type="module" src="./reference-hook.js"></script>
+  <script type="module" src="./cube-job-ui.js"></script>
 </body>
 </html>
