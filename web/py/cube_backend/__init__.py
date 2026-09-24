@@ -68,9 +68,6 @@ def _hard_centre_reference_verification(bank, edges, corners, center_rots):
     }
 
 
-# Make the hard centre invariant part of every serialized reconstruction candidate.
-# The worker already fixes centre ownership in its assignment matrix; this mirrors
-# that rule in the Python verifier so malformed or weak evidence cannot soften it.
 _reconstruct_module._reference_verification = _hard_centre_reference_verification
 
 
@@ -167,11 +164,16 @@ def _solve_3x3_negotiated(raw: bytes, tile_size: int) -> dict:
     negotiation = []
     considered = 0
     reached_floor = 1.0
+    reference_mode = False
+    levels_completed = 0
 
     for level in range(3):
         reconstruction = _reconstruct_wide(raw, tile_size, level)
         alternatives = reconstruction.pop("alternatives", [])
         candidates = [reconstruction] + alternatives
+        reference_mode = reference_mode or any(
+            isinstance(item.get("picture_verification"), dict) for item in candidates
+        )
         considered += int(reconstruction.get("hypotheses_considered", len(candidates)))
         candidates.sort(key=lambda item: (_mapping_quality(item), float(item.get("score", 0.0))), reverse=True)
         best = _mapping_quality(candidates[0]) if candidates else 0.0
@@ -202,18 +204,24 @@ def _solve_3x3_negotiated(raw: bytes, tile_size: int) -> dict:
                 "attempted_total": len(attempted),
                 "solved_total": len(solved),
             })
-            if solved and floor <= max(0.0, best - 0.18) and len(solved) >= min(6, len(candidates)):
+            if solved and floor <= max(0.0, best - 0.18) and len(solved) - solved_before >= min(6, len(candidates)):
                 break
-        if solved:
+        levels_completed = level + 1
+
+        # Without a semantic reference, the first mechanically valid level is
+        # enough. With artwork evidence, keep widening all three levels so the
+        # solver cannot stop at the first legal-but-visually-weaker mapping.
+        if solved and not reference_mode:
             break
 
     if not solved:
         raise RuntimeError("No legal tile mapping produced a valid solution after relaxing image confidence")
 
     selected = _select_minmax(solved)
+    verification = selected.get("picture_verification") if isinstance(selected.get("picture_verification"), dict) else None
     selected["selection_reason"] = (
-        "hard centre anchors at confidence 1.0; progressively relaxed non-centre tile-mapping confidence; "
-        "mechanically valid solutions negotiated by min-max mapping confidence and move count"
+        "hard centre anchors at confidence 1.0; one wrapped solved-picture target; progressively relaxed non-centre "
+        "tile-mapping confidence; mechanically valid solutions negotiated by min-max mapping confidence and move count"
     )
     selected["confidence_floor_reached"] = reached_floor
     selected["hypotheses_attempted"] = len(attempted)
@@ -222,10 +230,15 @@ def _solve_3x3_negotiated(raw: bytes, tile_size: int) -> dict:
     selected["hypothesis_move_counts"] = [int(item.get("move_count", 0)) for item in solved]
     selected["hypothesis_mapping_qualities"] = [float(_mapping_quality(item)) for item in solved]
     selected["negotiation"] = negotiation
+    selected["search_levels_completed"] = levels_completed
+    selected["reference_search_exhausted"] = bool(reference_mode and levels_completed == 3)
     selected["centre_anchor_policy"] = "centre sticker is canonical, confidence 1.0, never reassigned, never relaxed"
     selected["centre_anchor_confidence"] = 1.0
     selected["centre_confidence_relaxed"] = False
     selected["centre_ambiguity_allowed"] = False
+    selected["solved_picture_target"] = "selected wrapped reference" if reference_mode else "continuity reconstruction"
+    selected["solved_picture_mapping_quality"] = float(_mapping_quality(selected))
+    selected["solved_picture_verified"] = bool(verification and verification.get("verified"))
     return selected
 
 
