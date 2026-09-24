@@ -21,6 +21,7 @@ export class ReferenceAssistant extends PersistedReferenceAssistant{
         if(!this.result||this.selectedIndex<0)return;
         this.restoredDraft=null;
         this.identificationState=null;
+        this.identifier?.close?.();
         this.result.candidates[this.selectedIndex]=candidate;
         this.render();
         await this.persistIdentificationState(null);
@@ -55,6 +56,18 @@ export class ReferenceAssistant extends PersistedReferenceAssistant{
     this.identifier?.close?.();
     this.identificationState=null;
     return super.clearPersistedSession();
+  }
+
+  async matchCandidate(index){
+    const changing=index!==this.selectedIndex;
+    if(changing){
+      this.identifier?.close?.();
+      this.identificationState=null;
+    }
+    const candidate=await super.matchCandidate(index);
+    if(changing&&candidate?.usable)await this.persistIdentificationState(null);
+    this.renderIdentificationControl();
+    return candidate;
   }
 
   async restorePersisted(payload){
