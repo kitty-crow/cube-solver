@@ -41,6 +41,24 @@ class NegotiatedMappingTests(unittest.TestCase):
         self.assertEqual(floors[-1], 0.0)
         self.assertTrue(all(a >= b for a, b in zip(floors, floors[1:])))
 
+    def test_centres_are_always_maximum_confidence(self):
+        for centre in cube_backend._CENTRE_FACELETS:
+            self.assertEqual(cube_backend._centre_anchor_confidence(centre, centre), 1.0)
+
+    def test_centre_identity_is_never_ambiguous(self):
+        centres = sorted(cube_backend._CENTRE_FACELETS)
+        non_centre = next(index for index in range(54) if index not in cube_backend._CENTRE_FACELETS)
+        with self.assertRaises(RuntimeError):
+            cube_backend._centre_anchor_confidence(centres[0], non_centre)
+        with self.assertRaises(RuntimeError):
+            cube_backend._centre_anchor_confidence(non_centre, centres[0])
+        with self.assertRaises(RuntimeError):
+            cube_backend._centre_anchor_confidence(centres[0], centres[1])
+
+    def test_non_centres_remain_negotiable(self):
+        non_centres = [index for index in range(54) if index not in cube_backend._CENTRE_FACELETS]
+        self.assertIsNone(cube_backend._centre_anchor_confidence(non_centres[0], non_centres[1]))
+
 
 if __name__ == "__main__":
     unittest.main()
