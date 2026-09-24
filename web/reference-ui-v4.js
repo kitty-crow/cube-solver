@@ -1,5 +1,5 @@
 import { ReferenceAssistant as BaseReferenceAssistant } from "./reference-ui-v3.js";
-import { ReferenceAlignmentModal } from "./reference-aligner-v4.js";
+import { ReferenceAlignmentModal } from "./reference-aligner-v5.js";
 
 const FACE_NAMES=["U","R","F","D","L","B"];
 const DISPLAY_FACE_ORDER=["F","R","B","L","U","D"];
