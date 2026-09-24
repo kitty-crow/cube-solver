@@ -315,8 +315,25 @@ async function solve(payload) {
   status("reconstruct", `Reconstructing ${size}×${size}×${size} picture cube…`, 0.87);
   const payloadJson = JSON.stringify(payload);
   pyodide.globals.set("_scan_payload_json", payloadJson);
-  status("solve", "Finding and comparing legal move sequences…", 0.94);
-  const resultJson = await pyodide.runPythonAsync("cube_backend.solve_scan(_scan_payload_json)");
+
+  const progressCallback = (detail, progress) => {
+    const value = Number(progress);
+    status(
+      "solve-detail",
+      String(detail || "Evaluating legal cube hypotheses…"),
+      Number.isFinite(value) ? Math.max(0.94, Math.min(0.991, value)) : null,
+    );
+  };
+  pyodide.globals.set("_solver_progress_callback", progressCallback);
+  await pyodide.runPythonAsync("cube_backend.set_progress_callback(_solver_progress_callback)");
+  status("solve", "Starting legal mapping and move search…", 0.94);
+
+  let resultJson;
+  try {
+    resultJson = await pyodide.runPythonAsync("cube_backend.solve_scan(_scan_payload_json)");
+  } finally {
+    try { await pyodide.runPythonAsync("cube_backend.set_progress_callback(None)"); } catch (_) {}
+  }
   const result = JSON.parse(String(resultJson));
   status("complete", "Solved", 1);
   postMessage({ type: "solution", result });
