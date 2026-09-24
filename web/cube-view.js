@@ -26,7 +26,7 @@ function parseMove(token) {
   return { face, layers, turns };
 }
 
-function roundedStickerGeometry(size = 0.86, radius = 0.105) {
+function roundedStickerGeometry(size = 0.72, radius = 0.145) {
   const half = size / 2;
   const r = Math.min(radius, half * 0.48);
   const shape = new THREE.Shape();
@@ -39,7 +39,7 @@ function roundedStickerGeometry(size = 0.86, radius = 0.105) {
   shape.quadraticCurveTo(-half, half, -half, half - r);
   shape.lineTo(-half, -half + r);
   shape.quadraticCurveTo(-half, -half, -half + r, -half);
-  const geometry = new THREE.ShapeGeometry(shape, 6);
+  const geometry = new THREE.ShapeGeometry(shape, 8);
   const position = geometry.getAttribute("position");
   const uv = new Float32Array(position.count * 2);
   for (let i = 0; i < position.count; i += 1) {
@@ -137,11 +137,16 @@ export class CubeView {
     this.controls.minDistance = size * 1.45;
     this.controls.maxDistance = size * 4.2;
 
+    // Rounded mode represents the strongly radiused speed/picture cubes shown
+    // by the scan option, not a normal cube with an almost invisible fillet.
+    // Smaller bodies expose the black gaps and the substantially rounded
+    // stickers make the selected geometry obvious in the 3D result.
+    const bodySize = this.rounded ? 0.88 : 0.94;
     const boxGeometry = this.rounded
-      ? new RoundedBoxGeometry(0.94, 0.94, 0.94, 4, 0.085)
-      : new THREE.BoxGeometry(0.94, 0.94, 0.94);
+      ? new RoundedBoxGeometry(bodySize, bodySize, bodySize, 7, 0.165)
+      : new THREE.BoxGeometry(bodySize, bodySize, bodySize);
     const stickerGeometry = this.rounded
-      ? roundedStickerGeometry(0.86, 0.105)
+      ? roundedStickerGeometry(0.72, 0.145)
       : new THREE.PlaneGeometry(0.86, 0.86);
     const black = new THREE.MeshStandardMaterial({ color: 0x101312, roughness: 0.68, metalness: 0.05 });
     const cubeletByKey = new Map();
@@ -188,7 +193,7 @@ export class CubeView {
           stickerGeometry.clone(),
           new THREE.MeshBasicMaterial({ map: texture, side: THREE.DoubleSide }),
         );
-        sticker.position.copy(normal.clone().multiplyScalar(this.rounded ? 0.486 : 0.481));
+        sticker.position.copy(normal.clone().multiplyScalar(this.rounded ? bodySize / 2 + 0.008 : 0.481));
         const basis = new THREE.Matrix4();
         basis.makeBasis(right, up, normal);
         sticker.quaternion.setFromRotationMatrix(basis);
