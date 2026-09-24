@@ -16,6 +16,7 @@ export class ReferenceAlignmentModal extends AllowedReferenceAlignmentModal{
     super(options);
     this.onDraft=options.onDraft||(()=>{});
     this.draftTimer=null;
+    this.skipDraftOnClose=false;
   }
 
   ensureWorker(){
@@ -39,6 +40,7 @@ export class ReferenceAlignmentModal extends AllowedReferenceAlignmentModal{
   anyFaceLocked(){return FACE_NAMES.some(face=>this.isFaceLocked(face));}
 
   async open(options={}){
+    this.skipDraftOnClose=false;
     await super.open(options);
     const draft=options.draft;
     if(draft){
@@ -160,6 +162,7 @@ export class ReferenceAlignmentModal extends AllowedReferenceAlignmentModal{
 
   async handleLockedWorkerMessage(msg){
     await super.handleLockedWorkerMessage(msg);
+    if(msg?.type==="reference-adjust-error")this.skipDraftOnClose=false;
     if(msg?.projection?.minResidualAttenuation<.999&&msg.type==="reference-adjust-preview"){
       const pct=Math.round(Number(msg.projection.minResidualAttenuation||0)*100);
       this.statusEl.textContent=`Refinement limited to ${pct}% to preserve the connected cube surface without stretching`;
@@ -167,13 +170,16 @@ export class ReferenceAlignmentModal extends AllowedReferenceAlignmentModal{
   }
 
   requestCommit(action){
+    if(!this.worker||this.pendingCommitAction)return;
+    this.skipDraftOnClose=action==="apply";
     this.queueDraft();
     return super.requestCommit(action);
   }
 
   close(){
     clearTimeout(this.draftTimer);this.draftTimer=null;
-    if(this.candidate)Promise.resolve(this.onDraft(this.persistedDraft())).catch(()=>{});
+    const skip=this.skipDraftOnClose;this.skipDraftOnClose=false;
+    if(this.candidate&&!skip)Promise.resolve(this.onDraft(this.persistedDraft())).catch(()=>{});
     return super.close();
   }
 }
