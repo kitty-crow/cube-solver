@@ -1,16 +1,16 @@
 import assert from "node:assert/strict";
 import {
-  blankWarp, faceDirection, mapFacePoint, residualSafety,
+  blankWarp, cloneOrientation, faceDirection, mapFacePoint,
+  normaliseSphericalAngles, residualSafety,
 } from "../web/cube-surface-map.js";
 
 const near=(a,b,eps=1e-9)=>Math.abs(a-b)<=eps;
-
 function assertVecNear(a,b,eps=1e-9){
   assert.equal(a.length,b.length);
   for(let i=0;i<a.length;i++)assert.ok(near(a[i],b[i],eps),`component ${i}: ${a[i]} != ${b[i]}`);
 }
 
-const global={yaw:.61,pitch:-.28,roll:.19};
+const global={yaw:.61,pitch:-.28,roll:.19,scale:1.7};
 const extreme={points:Array.from({length:9},(_,i)=>[
   i%2===0?.44:-.44,
   i%3===0?-.44:.44,
@@ -23,9 +23,12 @@ const locals=[
   {yaw:.82,pitch:.63,roll:-.7},
   {yaw:-.76,pitch:-.64,roll:.73},
 ];
+
+// Local refinement is never stopped just because it crosses a face's old 2D
+// domain. The full source remains available, while seams are protected by the
+// zero-at-edge residual envelope.
 const safeties=locals.map(local=>residualSafety(extreme,local,global));
-assert.ok(safeties.every(value=>value>=0&&value<=1));
-assert.ok(safeties.some(value=>value<1),"extreme edits should be attenuated rather than edge-clamped");
+assert.deepEqual(safeties,[1,1,1,1,1,1]);
 
 const edgePoint=(edge,t)=>{
   if(edge==="L")return[0,t];
@@ -41,32 +44,37 @@ const seams=[
   [4,"L",5,"R",false],
 ];
 
-// Every physical edge is one mathematical seam, even when each adjacent face
-// has a different local residual. A correction on one face cannot detach it from
-// its neighbour or sample a second copy of some unrelated source patch.
+// Every physical cube edge remains exactly one seam, even under aggressive
+// local interior refinements and a global source scale.
 for(const[aFace,aEdge,bFace,bEdge,reverse]of seams){
   for(let i=0;i<=20;i++){
     const t=i/20,[au,av]=edgePoint(aEdge,t),[bu,bv]=edgePoint(bEdge,reverse?1-t:t);
-    const a=faceDirection(aFace,au,av,global,extreme,locals[aFace],safeties[aFace]);
-    const b=faceDirection(bFace,bu,bv,global,extreme,locals[bFace],safeties[bFace]);
+    const a=faceDirection(aFace,au,av,global,extreme,locals[aFace],1);
+    const b=faceDirection(bFace,bu,bv,global,extreme,locals[bFace],1);
     assertVecNear(a,b,1e-9);
   }
 }
 
-// Even pathological residuals are uniformly reduced until every sampled point
-// remains inside its original face domain. No individual pixel gets clamped to
-// an edge, which is what previously produced visible stretching.
-for(let face=0;face<6;face++)for(let y=0;y<=24;y++)for(let x=0;x<=24;x++){
-  const p=mapFacePoint(x/24,y/24,extreme,locals[face],global,safeties[face]);
-  assert.ok(p[0]>=-1e-9&&p[0]<=1+1e-9,`face ${face} u out of domain: ${p[0]}`);
-  assert.ok(p[1]>=-1e-9&&p[1]<=1+1e-9,`face ${face} v out of domain: ${p[1]}`);
-}
+// A strong residual is allowed to ask for source information beyond the old
+// selected-face box instead of pinning to its edge and smearing the last pixels.
+const translated={points:Array.from({length:9},()=>[.45,0])};
+const crossed=mapFacePoint(.35,.5,translated,global,global,1);
+assert.ok(crossed[0]<0,"full-source mapping should cross the old face boundary instead of clamping there");
 
-// With no residual, the mapping is identity and therefore all six face domains
-// are just views into one rigid cube wrap.
+// With no residual, the six domains remain ordinary views into one rigid wrap.
 const empty=blankWarp();
 for(const p of [[0,0],[.5,.5],[1,1],[.2,.8]]){
   assertVecNear(mapFacePoint(p[0],p[1],empty,global,global,1),p,1e-12);
 }
 
-console.log("connected cube-surface topology tests passed");
+// Manual cube rotation must not have a ±90° pitch wall.
+const multiTurn=cloneOrientation({yaw:0,pitch:Math.PI*5,roll:0});
+assert.equal(multiTurn.pitch,Math.PI*5);
+
+// Scaling or continued vertical movement through a pole reflects across the
+// pole and advances longitude instead of repeating a single edge row.
+const[lon,lat]=normaliseSphericalAngles(.2,Math.PI*.75);
+assert.ok(lat<=Math.PI/2&&lat>=-Math.PI/2);
+assert.ok(!near(lon,.2),"pole crossing should continue onto the opposite longitude");
+
+console.log("connected full-source cube topology tests passed");
