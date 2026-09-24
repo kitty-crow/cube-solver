@@ -96,8 +96,6 @@ def _solve_3x3(raw: bytes, tile_size: int) -> dict:
             solved_candidate["hypothesis_index"] = index
             solved.append(solved_candidate)
         except Exception:
-            # A lower-ranked visual hypothesis can still fail legality/solver
-            # checks independently; keep evaluating the remaining hypotheses.
             continue
 
     if not solved:
@@ -106,8 +104,6 @@ def _solve_3x3(raw: bytes, tile_size: int) -> dict:
     with_reference = any(isinstance(item.get("picture_verification"), dict) for item in solved)
     if with_reference:
         best_picture = max(float(item.get("picture_quality") or 0.0) for item in solved)
-        # Move count is evidence, not the primary objective. Only let it decide
-        # between hypotheses whose source-image agreement is essentially tied.
         near = [
             item for item in solved
             if float(item.get("picture_quality") or 0.0) >= best_picture - 0.035
@@ -162,6 +158,12 @@ def _reference_summary(evidence) -> dict | None:
     if not isinstance(reference, dict):
         return None
     source = reference.get("reference") if isinstance(reference.get("reference"), dict) else {}
+    previews = source.get("solved_face_previews")
+    if not isinstance(previews, list) or len(previews) != 6:
+        previews = []
+    face_order = source.get("face_order")
+    if not isinstance(face_order, list) or len(face_order) != 6:
+        face_order = list(FACE_NAMES)
     return {
         "subject": reference.get("subject"),
         "fit": reference.get("fit"),
@@ -172,6 +174,15 @@ def _reference_summary(evidence) -> dict | None:
         "source_url": source.get("source_url"),
         "layout": source.get("layout"),
         "recognition_model": reference.get("recognition_model"),
+        "solved_picture_target": bool(source.get("solved_picture_target")),
+        "solved_face_previews": previews,
+        "face_order": face_order,
+        "projection_kind": source.get("projection_kind"),
+        "surface_partition": source.get("surface_partition"),
+        "source_overlap_allowed": bool(source.get("source_overlap_allowed", False)),
+        "source_overlap_fraction": float(source.get("source_overlap_fraction", 0.0) or 0.0),
+        "face_domain_clipped_fraction": float(source.get("face_domain_clipped_fraction", 0.0) or 0.0),
+        "centre_alignment": source.get("centre_alignment"),
     }
 
 
@@ -206,4 +217,6 @@ def solve_scan(payload_json: str) -> str:
         summary = _reference_summary(evidence)
         if summary:
             result["semantic_reference"] = summary
+            result["solved_picture_target"] = "selected wrapped reference"
+            result["solved_picture_face_order"] = summary.get("face_order")
     return json.dumps(result, separators=(",", ":"))
