@@ -20,15 +20,12 @@ function needsStickerIdentification(){
 
 function syncLabel(){
   if(!solveButton||!needsStickerIdentification())return;
-  solveButton.textContent="Identify stickers";
-  solveButton.disabled=false;
+  if(solveButton.textContent!=="Identify stickers")solveButton.textContent="Identify stickers";
+  if(solveButton.disabled)solveButton.disabled=false;
 }
 
 solveButton?.addEventListener("click",event=>{
   if(!needsStickerIdentification())return;
-  // This capture listener is deliberately independent of the semantic-search
-  // listener. Once a usable solved wrap exists, the legacy fuzzy solver must
-  // never be allowed to bypass the manual/constraint identification stage.
   event.preventDefault();
   event.stopImmediatePropagation();
   const{assistant}=assistantCandidate();
@@ -39,6 +36,9 @@ solveButton?.addEventListener("click",event=>{
   });
 },true);
 
+if(solveButton){
+  new MutationObserver(syncLabel).observe(solveButton,{childList:true,characterData:true,subtree:true,attributes:true,attributeFilter:["disabled"]});
+}
 window.addEventListener("picture-reference-ready",syncLabel);
 window.addEventListener("picture-stickers-resolved",()=>{
   if(solveButton)solveButton.textContent="Solve identified cube";
