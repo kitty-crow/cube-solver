@@ -55,15 +55,15 @@ function identityScoreMatrix(){
 }
 
 {
-  // Ambiguous answers are deliberately soft. Six 50% human hints, combined
-  // with a strongly coherent image prior and exact cube mechanics, may make a
-  // best legal state confident enough to solve without forcing uniqueness.
+  // Ambiguous answers are deliberately soft. Twelve 50% human hints equal
+  // six hard-confirmation equivalents for the automatic-confidence gate.
   const ambiguities={};
-  for(const tile of[5,7,3,8,6,0])ambiguities[tile]={target:tile,rotation:0,weight:.5};
+  const hintTiles=[5,7,3,1,32,28,8,6,0,2,29,27];
+  for(const tile of hintTiles)ambiguities[tile]={target:tile,rotation:0,weight:.5};
   const result=analyseStickerConstraints({ambiguities,absoluteF32B64:identityScoreMatrix(),centerRotations:[0,0,0,0,0,0]});
   assert.equal(result.ok,true);
   assert.ok(result.legalStateCount>1);
-  assert.equal(result.ambiguousCount,6);
+  assert.equal(result.ambiguousCount,12);
   assert.ok(result.stateConfidence>0.93);
   assert.ok(result.resolved);
   assert.equal(result.resolved.exact,false);
