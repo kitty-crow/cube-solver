@@ -9,11 +9,10 @@ export class ReferenceAlignmentModal extends CommitSafeReferenceAlignmentModal{
     await super.open(options);
     if(!this.migratedLegacyMapping)return;
 
-    // captureFaceSnapshot() prefers lastRenderedProjection. During migration the
-    // first worker preview may still describe the old 0.8.x face residuals, so a
-    // locked face could otherwise restore exactly the stretch we are removing.
-    // Replace both the live state and the snapshot source with the sanitised
-    // global-wrap state before rebuilding immutable lock snapshots.
+    // During migration the first loaded preview may still be the old stretched
+    // 0.8.x bitmap. Sanitize both the mapping parameters and immutable lock
+    // snapshots, but deliberately DO NOT preserve that stale preview bitmap.
+    // The next worker preview is rebuilt from the complete original source.
     this.faceWarps=Object.fromEntries(FACE_NAMES.map(face=>[face,emptyWarp()]));
     this.faceOrientations=Object.fromEntries(FACE_NAMES.map(face=>[face,cloneOrientation(this.orientation)]));
     this.lastRenderedProjection={
@@ -22,7 +21,14 @@ export class ReferenceAlignmentModal extends CommitSafeReferenceAlignmentModal{
       faceWarps:Object.fromEntries(FACE_NAMES.map(face=>[face,emptyWarp()])),
     };
     this.lockedFaceSnapshots={};
-    for(const face of FACE_NAMES)if(this.isFaceLocked(face))this.lockedFaceSnapshots[face]=this.captureFaceSnapshot(face);
+    for(const face of FACE_NAMES){
+      if(!this.isFaceLocked(face))continue;
+      this.lockedFaceSnapshots[face]={
+        orientation:cloneOrientation(this.orientation),
+        warp:emptyWarp(),
+        previewImage:null,
+      };
+    }
     this.changed();
     this.statusEl.textContent="Upgraded old mapping: preserved cube placement and removed legacy face-edge stretching";
   }
