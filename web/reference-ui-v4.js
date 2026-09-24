@@ -1,9 +1,19 @@
 import { ReferenceAssistant as BaseReferenceAssistant } from "./reference-ui-v3.js";
-import { ReferenceAlignmentModal } from "./reference-aligner-v5.js";
+import { ReferenceAlignmentModal } from "./reference-aligner-v6.js";
 
 const FACE_NAMES=["U","R","F","D","L","B"];
 const DISPLAY_FACE_ORDER=["F","R","B","L","U","D"];
 const FACE_LABELS={U:"Top",R:"Right",F:"Front",D:"Bottom",L:"Left",B:"Back"};
+const TRANSFORM_KEYS=["move","rotate","scale","warp","yaw","pitch","roll"];
+
+function transformAllows(projection={}){
+  if(projection.transformAllows)return projection.transformAllows;
+  const locks=projection.transformLocks||{};
+  return Object.fromEntries(FACE_NAMES.map(face=>[
+    face,
+    Object.fromEntries(TRANSFORM_KEYS.map(key=>[key,!Boolean(locks?.[face]?.[key])])),
+  ]));
+}
 
 function installLaunchStyles(){
   if(document.querySelector("#reference-aligner-launch-styles"))return;
@@ -57,6 +67,7 @@ export class ReferenceAssistant extends BaseReferenceAssistant{
         face_orientations:candidate.projection.faceOrientations||null,
         face_warps:candidate.projection.faceWarps||null,
         locked_faces:candidate.projection.lockedFaces||null,
+        transform_allows:transformAllows(candidate.projection),
         transform_locks:candidate.projection.transformLocks||null,
         alignment_diagnostics:candidate.manualDiagnostics||null,
       };
@@ -132,7 +143,7 @@ export class ReferenceAssistant extends BaseReferenceAssistant{
     if(d){
       note.textContent=`Manual correction ${Number(d.angularErrorDeg||0).toFixed(1)}° · centre margin ${(Number(d.corrected?.centreMargin||0)*100).toFixed(1)}% (auto ${(Number(d.automatic?.centreMargin||0)*100).toFixed(1)}%) · ${lockedCount} face${lockedCount===1?"":"s"} locked. Tap a face below for per-face wrap.`;
     }else{
-      note.textContent="Global refine moves the internet artwork across all unlocked faces. Tap any face below for per-face wrapping; locked faces stay unchanged.";
+      note.textContent="Global refine changes unlocked faces using only the adjustments enabled for each face. Tap a face below for per-face wrapping; locked faces stay unchanged.";
     }
   }
 
