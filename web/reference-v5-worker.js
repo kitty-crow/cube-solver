@@ -1,1 +1,1 @@
-import "./reference-v6-worker.js";
+import "./reference-v7-worker.js";
