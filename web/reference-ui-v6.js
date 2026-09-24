@@ -1,5 +1,5 @@
 import { ReferenceAssistant as PersistedReferenceAssistant } from "./reference-ui-v4.js";
-import { ReferenceAlignmentModal } from "./reference-aligner-v9.js";
+import { ReferenceAlignmentModal } from "./reference-aligner-v10.js";
 
 export class ReferenceAssistant extends PersistedReferenceAssistant{
   constructor(options={}){
