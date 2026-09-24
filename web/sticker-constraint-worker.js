@@ -1,4 +1,4 @@
-import { analyseStickerConstraints } from "./sticker-constraints.js";
+import { analyseStickerConstraints } from "./sticker-constraints-v2.js";
 
 self.addEventListener("message",(event)=>{
   const data=event.data||{};
