@@ -51,8 +51,6 @@ async function fetchReferenceBlob(url){
 function cloneCandidate(candidate){
   if(!candidate)return null;
   const copy=structuredClone(candidate);
-  // Blob URLs die with the browsing document. The actual image bytes are stored
-  // separately in IndexedDB and a fresh object URL is created on restore.
   if(String(copy.thumbnailUrl||"").startsWith("blob:"))copy.thumbnailUrl="";
   return copy;
 }
@@ -64,17 +62,12 @@ async function readCurrent(db){
   return record;
 }
 
-export async function saveReferenceSession({payload,result,selectedIndex,candidate,draft=null,editorState=null}){
+export async function saveReferenceSession({payload,result,selectedIndex,candidate,draft=null,editorState=null,identificationState=undefined}){
   if(!payload||!candidate)return false;
   let db;
   try{
     db=await openDb();
     const fingerprint=referenceFingerprint(payload);
-
-    // Do not keep a read/write IndexedDB transaction open across a network
-    // fetch. Browsers are allowed to auto-commit an idle transaction while the
-    // fetch is pending, which previously made autosaves intermittently vanish
-    // with TransactionInactiveError on reload.
     const existing=await readCurrent(db).catch(()=>null);
     const candidateCopy=cloneCandidate(candidate);
     const remoteThumbnail=String(candidate?.thumbnailUrl||candidate?.sourceUrl||"");
@@ -83,7 +76,7 @@ export async function saveReferenceSession({payload,result,selectedIndex,candida
 
     const record={
       key:"current",
-      version:2,
+      version:3,
       fingerprint,
       size:Number(payload.size||0),
       subject:String(result?.subject||""),
@@ -96,6 +89,9 @@ export async function saveReferenceSession({payload,result,selectedIndex,candida
       referenceBlob:referenceBlob||null,
       draft:structuredClone(draft||null),
       editorState:structuredClone(editorState||null),
+      identificationState:identificationState===undefined
+        ?structuredClone(existing?.identificationState||null)
+        :structuredClone(identificationState||null),
       savedAt:Date.now(),
     };
 
