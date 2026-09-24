@@ -137,16 +137,17 @@ export class CubeView {
     this.controls.minDistance = size * 1.45;
     this.controls.maxDistance = size * 4.2;
 
-    // Rounded mode represents the strongly radiused speed/picture cubes shown
-    // by the scan option, not a normal cube with an almost invisible fillet.
-    // Smaller bodies expose the black gaps and the substantially rounded
-    // stickers make the selected geometry obvious in the 3D result.
-    const bodySize = this.rounded ? 0.88 : 0.94;
+    // Rounded means rounded cubie geometry, not widely separated cubies. The
+    // physical speed/picture cubes this option represents are still tightly
+    // packed, with only a narrow mechanical seam between pieces. Keep the
+    // centres on the exact unit lattice for legal move animation, but make each
+    // body almost fill that unit cell and carry the artwork close to its edge.
+    const bodySize = this.rounded ? 0.985 : 0.94;
     const boxGeometry = this.rounded
-      ? new RoundedBoxGeometry(bodySize, bodySize, bodySize, 7, 0.165)
+      ? new RoundedBoxGeometry(bodySize, bodySize, bodySize, 7, 0.15)
       : new THREE.BoxGeometry(bodySize, bodySize, bodySize);
     const stickerGeometry = this.rounded
-      ? roundedStickerGeometry(0.72, 0.145)
+      ? roundedStickerGeometry(0.93, 0.115)
       : new THREE.PlaneGeometry(0.86, 0.86);
     const black = new THREE.MeshStandardMaterial({ color: 0x101312, roughness: 0.68, metalness: 0.05 });
     const cubeletByKey = new Map();
@@ -193,7 +194,7 @@ export class CubeView {
           stickerGeometry.clone(),
           new THREE.MeshBasicMaterial({ map: texture, side: THREE.DoubleSide }),
         );
-        sticker.position.copy(normal.clone().multiplyScalar(this.rounded ? bodySize / 2 + 0.008 : 0.481));
+        sticker.position.copy(normal.clone().multiplyScalar(this.rounded ? bodySize / 2 + 0.003 : 0.481));
         const basis = new THREE.Matrix4();
         basis.makeBasis(right, up, normal);
         sticker.quaternion.setFromRotationMatrix(basis);
