@@ -1,5 +1,5 @@
 import { ReferenceAssistant as PersistedReferenceAssistant } from "./reference-ui-v4.js";
-import { ReferenceAlignmentModal } from "./reference-aligner-v12.js";
+import { ReferenceAlignmentModal } from "./reference-aligner-v13.js";
 
 export class ReferenceAssistant extends PersistedReferenceAssistant{
   constructor(options={}){
@@ -9,6 +9,11 @@ export class ReferenceAssistant extends PersistedReferenceAssistant{
     this.aligner=new ReferenceAlignmentModal({
       onStatus:(message)=>{if(message)this.statusEl.textContent=message;},
       onDraft:(draft)=>this.queueDraftPersistence(draft),
+      onDraftImmediate:(draft)=>{
+        this.restoredDraft=draft?structuredClone(draft):null;
+        clearTimeout(this.draftSaveTimer);
+        return this.persistSessionOnly(this.restoredDraft);
+      },
       onCommit:async(candidate)=>{
         if(!this.result||this.selectedIndex<0)return;
         this.restoredDraft=null;
