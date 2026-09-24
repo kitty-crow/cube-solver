@@ -113,6 +113,36 @@ export async function loadReferenceSession(payload){
   }finally{db?.close?.();}
 }
 
+export async function exportReferenceSession(payload){
+  const record=await loadReferenceSession(payload);
+  if(!record)return null;
+  return structuredClone(record);
+}
+
+export async function importReferenceSession(payload,snapshot,referenceBlob=null){
+  if(!payload||!snapshot?.candidate)return false;
+  let db;
+  try{
+    db=await openDb();
+    const copy=structuredClone(snapshot);
+    delete copy.referenceBlob;
+    const record={
+      ...copy,
+      key:"current",
+      version:Math.max(3,Number(copy.version)||0),
+      fingerprint:referenceFingerprint(payload),
+      size:Number(payload.size||0),
+      candidate:cloneCandidate(copy.candidate),
+      referenceBlob:referenceBlob instanceof Blob?referenceBlob:null,
+      savedAt:Number(copy.savedAt||Date.now()),
+    };
+    const tx=db.transaction(STORE,"readwrite");
+    tx.objectStore(STORE).put(record);
+    await txDone(tx);
+    return true;
+  }finally{db?.close?.();}
+}
+
 export async function clearReferenceSession(){
   let db;
   try{
