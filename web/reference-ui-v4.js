@@ -54,21 +54,36 @@ export class ReferenceAssistant extends BaseReferenceAssistant{
     const evidence=super.selectedEvidence();
     if(!evidence)return null;
     const candidate=this.result?.candidates?.[this.selectedIndex];
-    if(candidate?.projection?.manual){
+    if(!candidate)return evidence;
+
+    const projection=candidate.projection||{};
+    evidence.reference={
+      ...(evidence.reference||{}),
+      solved_picture_target:true,
+      solved_face_previews:Array.isArray(candidate.facePreviews)?[...candidate.facePreviews]:[],
+      face_order:[...FACE_NAMES],
+      projection_kind:projection.kind||null,
+      surface_partition:projection.surfacePartition||"single-cubemap",
+      source_overlap_allowed:false,
+      source_overlap_fraction:Number(projection.sourceOverlapFraction||0),
+      face_domain_clipped_fraction:Number(projection.faceDomainClippedFraction||0),
+      centre_alignment:candidate.alignment||null,
+    };
+
+    if(projection.manual){
       evidence.reference={
         ...(evidence.reference||{}),
         manual_alignment:true,
-        projection_kind:candidate.projection.kind,
         orientation:{
-          yaw:Number(candidate.projection.orientation?.yaw||0),
-          pitch:Number(candidate.projection.orientation?.pitch||0),
-          roll:Number(candidate.projection.orientation?.roll||0),
+          yaw:Number(projection.orientation?.yaw||0),
+          pitch:Number(projection.orientation?.pitch||0),
+          roll:Number(projection.orientation?.roll||0),
         },
-        face_orientations:candidate.projection.faceOrientations||null,
-        face_warps:candidate.projection.faceWarps||null,
-        locked_faces:candidate.projection.lockedFaces||null,
-        transform_allows:transformAllows(candidate.projection),
-        transform_locks:candidate.projection.transformLocks||null,
+        face_orientations:projection.faceOrientations||null,
+        face_warps:projection.faceWarps||null,
+        locked_faces:projection.lockedFaces||null,
+        transform_allows:transformAllows(projection),
+        transform_locks:projection.transformLocks||null,
         alignment_diagnostics:candidate.manualDiagnostics||null,
       };
     }
@@ -140,10 +155,11 @@ export class ReferenceAssistant extends BaseReferenceAssistant{
     button.textContent="Global refine";
     const lockedCount=FACE_NAMES.filter(face=>Boolean(Array.isArray(candidate.projection.lockedFaces)?candidate.projection.lockedFaces.includes(face):candidate.projection.lockedFaces?.[face])).length;
     const d=candidate.manualDiagnostics;
+    const partition=candidate.projection?.surfacePartition||"single-cubemap";
     if(d){
-      note.textContent=`Manual correction ${Number(d.angularErrorDeg||0).toFixed(1)}° · centre margin ${(Number(d.corrected?.centreMargin||0)*100).toFixed(1)}% (auto ${(Number(d.automatic?.centreMargin||0)*100).toFixed(1)}%) · ${lockedCount} face${lockedCount===1?"":"s"} locked. Tap a face below for per-face wrap.`;
+      note.textContent=`Manual correction ${Number(d.angularErrorDeg||0).toFixed(1)}° · centre margin ${(Number(d.corrected?.centreMargin||0)*100).toFixed(1)}% (auto ${(Number(d.automatic?.centreMargin||0)*100).toFixed(1)}%) · ${lockedCount} face${lockedCount===1?"":"s"} locked · ${partition}, no face overlap. Tap a face below for per-face wrap.`;
     }else{
-      note.textContent="Global refine changes unlocked faces using only the adjustments enabled for each face. Tap a face below for per-face wrapping; locked faces stay unchanged.";
+      note.textContent="The six faces are one wrapped cubemap: each source region belongs to exactly one face. Global refine changes unlocked faces using only the enabled adjustments; tap a face for local wrapping.";
     }
   }
 
