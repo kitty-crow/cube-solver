@@ -92,6 +92,8 @@ export class ReferenceAssistant extends BaseReferenceAssistant{
 
   render(){
     super.render();
+    const title=this.sixWrap?.querySelector(".reference-six__title");
+    if(title)title.textContent="This is what the solved cube should look like";
     this.decorateFacePreviews();
     this.renderAlignmentControls();
   }
@@ -157,9 +159,9 @@ export class ReferenceAssistant extends BaseReferenceAssistant{
     const d=candidate.manualDiagnostics;
     const partition=candidate.projection?.surfacePartition||"single-cubemap";
     if(d){
-      note.textContent=`Manual correction ${Number(d.angularErrorDeg||0).toFixed(1)}° · centre margin ${(Number(d.corrected?.centreMargin||0)*100).toFixed(1)}% (auto ${(Number(d.automatic?.centreMargin||0)*100).toFixed(1)}%) · ${lockedCount} face${lockedCount===1?"":"s"} locked · ${partition}, no face overlap. Tap a face below for per-face wrap.`;
+      note.textContent=`The solver will solve toward these exact six faces. Manual correction ${Number(d.angularErrorDeg||0).toFixed(1)}° · centre margin ${(Number(d.corrected?.centreMargin||0)*100).toFixed(1)}% (auto ${(Number(d.automatic?.centreMargin||0)*100).toFixed(1)}%) · ${lockedCount} face${lockedCount===1?"":"s"} locked · ${partition}, no face overlap.`;
     }else{
-      note.textContent="The six faces are one wrapped cubemap: each source region belongs to exactly one face. Global refine changes unlocked faces using only the enabled adjustments; tap a face for local wrapping.";
+      note.textContent="The solver will solve toward these exact six faces. They are one wrapped cubemap: each source region belongs to exactly one face. Global refine changes unlocked faces using only the enabled adjustments; tap a face for local wrapping.";
     }
   }
 
