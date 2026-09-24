@@ -245,9 +245,6 @@ def _solve_3x3_negotiated(raw: bytes, tile_size: int) -> dict:
                 break
         levels_completed = level + 1
 
-        # Without a semantic reference, the first mechanically valid level is
-        # enough. With artwork evidence, keep widening all three levels so the
-        # solver cannot stop at the first legal-but-visually-weaker mapping.
         if solved and not reference_mode:
             break
 
@@ -287,8 +284,36 @@ def _solve_3x3_negotiated(raw: bytes, tile_size: int) -> dict:
     return selected
 
 
+_original_manual_solver = _backend._solve_manual_3x3
+
+
+def _solve_manual_with_reported_confidence(manual: dict) -> dict:
+    result = _original_manual_solver(manual)
+    exact = bool(manual.get("exact", True))
+    confidence = max(0.0, min(1.0, float(manual.get("confidence", 1.0) or 0.0)))
+    result["confidence"] = 1.0 if exact else confidence
+    result["manual_identification_exact"] = exact
+    result["manual_identification_resolution_kind"] = manual.get(
+        "resolution_kind", "unique" if exact else "probable"
+    )
+    result["legal_state_count"] = int(manual.get("legal_state_count", 1) or 1)
+    ambiguous = manual.get("ambiguous") if isinstance(manual.get("ambiguous"), dict) else {}
+    result["manual_ambiguous_stickers"] = len(ambiguous)
+    if exact:
+        result["selection_reason"] = (
+            "unique legal scramble from hard user confirmations plus exact cube-constraint propagation"
+        )
+    else:
+        result["selection_reason"] = (
+            "highest-confidence mechanically legal scramble from hard confirmations, 50% ambiguous human hints, "
+            "cubie type/adjacency constraints, parity, and wrapped-image similarity"
+        )
+    return result
+
+
 _backend.reconstruct = _reconstruct_wide
 _backend._solve_3x3 = _solve_3x3_negotiated
+_backend._solve_manual_3x3 = _solve_manual_with_reported_confidence
 
 reconstruct = _reconstruct_wide
 solve_scan = _backend.solve_scan
