@@ -275,6 +275,7 @@ export class ReferenceAssistant extends BaseReferenceAssistant{
       await this.aligner.open({
         candidate:workingCandidate,
         payload:this.lastPayload,
+        draft:saved||undefined,
         initialMode:face?"face":(saved?savedMode:"global"),
         initialFace:face||savedFace||undefined,
       });
