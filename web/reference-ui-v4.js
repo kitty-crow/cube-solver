@@ -1,5 +1,5 @@
 import { ReferenceAssistant as BaseReferenceAssistant } from "./reference-ui-v3.js";
-import { ReferenceAlignmentModal } from "./reference-aligner-v2.js";
+import { ReferenceAlignmentModal } from "./reference-aligner-v3.js";
 
 function installLaunchStyles(){
   if(document.querySelector("#reference-aligner-launch-styles"))return;
@@ -91,7 +91,7 @@ export class ReferenceAssistant extends BaseReferenceAssistant{
     if(d){
       note.textContent=`Manual correction ${Number(d.angularErrorDeg||0).toFixed(1)}° · centre margin ${(Number(d.corrected?.centreMargin||0)*100).toFixed(1)}% (auto ${(Number(d.automatic?.centreMargin||0)*100).toFixed(1)}%)`;
     }else{
-      note.textContent="Overlay the reference artwork on the photographed cube, move and rotate it continuously, then warp individual faces where needed.";
+      note.textContent="The photographed cube stays fixed while you drag, rotate, scale and warp the internet artwork overlay into place.";
     }
   }
 
