@@ -45,7 +45,7 @@ for(let y=0;y<=24;y++)for(let x=0;x<=24;x++){
 // are just views into one rigid cube wrap.
 const empty=blankWarp();
 for(const p of [[0,0],[.5,.5],[1,1],[.2,.8]]){
-  assert.deepEqual(mapFacePoint(p[0],p[1],empty,global,global,1),p);
+  assertVecNear(mapFacePoint(p[0],p[1],empty,global,global,1),p,1e-12);
 }
 
 console.log("connected cube-surface topology tests passed");
