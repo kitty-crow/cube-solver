@@ -75,9 +75,15 @@ export class ReferenceAlignmentModal extends AllowedReferenceAlignmentModal{
       transformAllows:cloneTransformAllows(this.transformAllows),
       opacity:Number(this.opacity||0),
       faceIndex:Number(this.faceIndex||0),
+      face:FACE_NAMES[this.faceIndex],
       mode:this.mode==="face"?"face":"global",
       savedAt:Date.now(),
     };
+  }
+
+  persistedDraft(){
+    const state=this.draftState();
+    return{...state,projection:this.adjustmentPayload()};
   }
 
   queueDraft(){
@@ -85,7 +91,7 @@ export class ReferenceAlignmentModal extends AllowedReferenceAlignmentModal{
     this.draftTimer=setTimeout(()=>{
       this.draftTimer=null;
       if(!this.candidate)return;
-      Promise.resolve(this.onDraft(this.draftState())).catch(error=>console.warn("Could not autosave reference mapping",error));
+      Promise.resolve(this.onDraft(this.persistedDraft())).catch(error=>console.warn("Could not autosave reference mapping",error));
     },100);
   }
 
@@ -167,7 +173,7 @@ export class ReferenceAlignmentModal extends AllowedReferenceAlignmentModal{
 
   close(){
     clearTimeout(this.draftTimer);this.draftTimer=null;
-    if(this.candidate)Promise.resolve(this.onDraft(this.draftState())).catch(()=>{});
+    if(this.candidate)Promise.resolve(this.onDraft(this.persistedDraft())).catch(()=>{});
     return super.close();
   }
 }
