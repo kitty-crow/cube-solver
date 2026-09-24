@@ -287,10 +287,15 @@ def _solve_3x3_negotiated(raw: bytes, tile_size: int) -> dict:
 _original_manual_solver = _backend._solve_manual_3x3
 
 
-def _solve_manual_with_reported_confidence(manual: dict) -> dict:
-    result = _original_manual_solver(manual)
-    exact = bool(manual.get("exact", True))
-    confidence = max(0.0, min(1.0, float(manual.get("confidence", 1.0) or 0.0)))
+def _solve_manual_with_reported_confidence(raw: bytes, tile_size: int, manual: dict) -> dict:
+    """Preserve manual-CSP confidence without changing the backend call contract."""
+    result = _original_manual_solver(raw, tile_size, manual)
+    exact = bool(manual.get("exact", manual.get("resolution_kind") == "unique"))
+    default_confidence = 1.0 if exact else 0.0
+    try:
+        confidence = max(0.0, min(1.0, float(manual.get("confidence", default_confidence))))
+    except (TypeError, ValueError):
+        confidence = default_confidence
     result["confidence"] = 1.0 if exact else confidence
     result["manual_identification_exact"] = exact
     result["manual_identification_resolution_kind"] = manual.get(
