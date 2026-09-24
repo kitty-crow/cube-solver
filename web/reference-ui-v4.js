@@ -1,5 +1,6 @@
 import { ReferenceAssistant as BaseReferenceAssistant } from "./reference-ui-v3.js";
-import { ReferenceAlignmentModal } from "./reference-aligner-v6.js";
+import { ReferenceAlignmentModal } from "./reference-aligner-v7.js";
+import { clearReferenceSession, loadReferenceSession, referenceFingerprint, saveReferenceSession } from "./reference-session.js";
 
 const FACE_NAMES=["U","R","F","D","L","B"];
 const DISPLAY_FACE_ORDER=["F","R","B","L","U","D"];
@@ -33,10 +34,15 @@ export class ReferenceAssistant extends BaseReferenceAssistant{
   constructor(options={}){
     super(options);
     installLaunchStyles();
+    this.restoredDraft=null;
+    this.sessionObjectUrl="";
+    this.draftSaveTimer=null;
     this.aligner=new ReferenceAlignmentModal({
       onStatus:(message)=>{if(message)this.statusEl.textContent=message;},
+      onDraft:(draft)=>this.queueDraftPersistence(draft),
       onCommit:async(candidate)=>{
         if(!this.result||this.selectedIndex<0)return;
+        this.restoredDraft=null;
         this.result.candidates[this.selectedIndex]=candidate;
         this.render();
         await this.persistSelected();
@@ -45,16 +51,90 @@ export class ReferenceAssistant extends BaseReferenceAssistant{
     });
   }
 
+  revokeSessionUrl(){
+    if(this.sessionObjectUrl){
+      try{URL.revokeObjectURL(this.sessionObjectUrl);}catch(_){}
+      this.sessionObjectUrl="";
+    }
+  }
+
   invalidate(){
+    clearTimeout(this.draftSaveTimer);
     this.aligner?.close?.();
+    this.revokeSessionUrl();
+    this.restoredDraft=null;
     super.invalidate();
+  }
+
+  async clearPersistedSession(){
+    clearTimeout(this.draftSaveTimer);
+    this.restoredDraft=null;
+    this.revokeSessionUrl();
+    await clearReferenceSession();
+  }
+
+  queueDraftPersistence(draft){
+    this.restoredDraft=draft?structuredClone(draft):null;
+    clearTimeout(this.draftSaveTimer);
+    this.draftSaveTimer=setTimeout(()=>{
+      this.persistSessionOnly(this.restoredDraft).catch(error=>console.warn("Could not autosave reference mapping",error));
+    },220);
+  }
+
+  async persistSessionOnly(draft=this.restoredDraft){
+    const candidate=this.result?.candidates?.[this.selectedIndex];
+    if(!candidate||!this.lastPayload)return false;
+    return saveReferenceSession({
+      payload:this.lastPayload,
+      result:this.result,
+      selectedIndex:this.selectedIndex,
+      candidate,
+      draft,
+      editorState:draft?{mode:draft.mode||"global",face:draft.face||"F"}:null,
+    });
+  }
+
+  async persistSelected(){
+    await super.persistSelected();
+    await this.persistSessionOnly(this.restoredDraft);
+  }
+
+  async restorePersisted(payload){
+    const session=await loadReferenceSession(payload);
+    if(!session?.candidate)return false;
+    this.revokeSessionUrl();
+    const candidate=structuredClone(session.candidate);
+    if(session.referenceBlob instanceof Blob){
+      this.sessionObjectUrl=URL.createObjectURL(session.referenceBlob);
+      candidate.thumbnailUrl=this.sessionObjectUrl;
+    }else if(!candidate.thumbnailUrl&&session.remoteThumbnail){
+      candidate.thumbnailUrl=session.remoteThumbnail;
+    }
+    this.lastPayload={...payload};
+    this.lastKey=referenceFingerprint(payload);
+    this.lastSubject=String(session.subject||"");
+    this.searchResult={
+      subject:this.lastSubject,
+      guesses:session.guesses||[],
+      faceRecognitions:session.faceRecognitions||[],
+      model:session.model||null,
+      candidates:[candidate],
+    };
+    this.result={...this.searchResult,candidates:[candidate]};
+    this.selectedIndex=0;
+    this.matchingIndex=-1;
+    this.restoredDraft=session.draft||null;
+    this.render();
+    await super.persistSelected();
+    this.statusEl.textContent=this.restoredDraft
+      ?"Restored saved reference and unfinished mapping. Open Refine to continue exactly where you left off."
+      :"Restored saved reference and cube mapping from this scan.";
+    return true;
   }
 
   selectedEvidence(){
     const evidence=super.selectedEvidence();
     if(!evidence)return null;
-    // v2 is the stable IndexedDB/Python wire format. mappingVersion below can
-    // advance independently as the cubemap editor gains stronger invariants.
     evidence.version=2;
     const candidate=this.result?.candidates?.[this.selectedIndex];
     if(!candidate)return evidence;
@@ -71,6 +151,13 @@ export class ReferenceAssistant extends BaseReferenceAssistant{
       source_overlap_fraction:Number(projection.sourceOverlapFraction||0),
       face_domain_clipped_fraction:Number(projection.faceDomainClippedFraction||0),
       centre_alignment:candidate.alignment||null,
+      topology:{
+        kind:"continuous-cube-surface",
+        rigid_pose:true,
+        shared_seams:true,
+        independent_face_cameras:false,
+        edge_stretch_allowed:false,
+      },
     };
 
     if(projection.manual){
@@ -157,26 +244,39 @@ export class ReferenceAssistant extends BaseReferenceAssistant{
     const editable=Boolean(candidate?.usable&&candidate?.projection?.editable&&candidate.projection.kind==="equirectangular"&&this.lastPayload);
     tools.hidden=!editable;
     if(!editable)return;
-    button.textContent="Global refine";
+    button.textContent=this.restoredDraft?"Continue saved refine":"Global refine";
     const lockedCount=FACE_NAMES.filter(face=>Boolean(Array.isArray(candidate.projection.lockedFaces)?candidate.projection.lockedFaces.includes(face):candidate.projection.lockedFaces?.[face])).length;
     const d=candidate.manualDiagnostics;
-    const partition=candidate.projection?.surfacePartition||"single-cubemap";
-    if(d){
-      note.textContent=`The solver will solve toward these exact six faces. Manual correction ${Number(d.angularErrorDeg||0).toFixed(1)}° · centre margin ${(Number(d.corrected?.centreMargin||0)*100).toFixed(1)}% (auto ${(Number(d.automatic?.centreMargin||0)*100).toFixed(1)}%) · ${lockedCount} face${lockedCount===1?"":"s"} locked · ${partition}, no face overlap.`;
+    if(this.restoredDraft){
+      note.textContent="An unfinished mapping was autosaved on this device. Continue refine to resume it. The six faces are one connected cube surface, not independent image crops.";
+    }else if(d){
+      note.textContent=`The solver will solve toward these exact six connected faces. Manual correction ${Number(d.angularErrorDeg||0).toFixed(1)}° · centre margin ${(Number(d.corrected?.centreMargin||0)*100).toFixed(1)}% (auto ${(Number(d.automatic?.centreMargin||0)*100).toFixed(1)}%) · ${lockedCount} face${lockedCount===1?"":"s"} locked · shared cube seams, no source overlap.`;
     }else{
-      note.textContent="The solver will solve toward these exact six faces. They are one wrapped cubemap: each source region belongs to exactly one face. Global refine changes unlocked faces using only the enabled adjustments; tap a face for local wrapping.";
+      note.textContent="The reference is wrapped once around one cube. Aligning one face changes the rigid pose of all six; local refinement preserves the shared seams. Mapping progress is autosaved on this device.";
     }
   }
 
   async openAlignment(face=null){
     const candidate=this.result?.candidates?.[this.selectedIndex];
     if(!candidate||!this.lastPayload)return;
+    const saved=this.restoredDraft;
+    const workingCandidate=saved?.projection?{
+      ...candidate,
+      projection:{
+        ...(candidate.projection||{}),
+        ...saved.projection,
+        kind:"equirectangular",
+        editable:true,
+      },
+    }:candidate;
+    const savedFace=saved?.face&&FACE_NAMES.includes(saved.face)?saved.face:null;
+    const savedMode=saved?.mode==="face"?"face":"global";
     try{
       await this.aligner.open({
-        candidate,
+        candidate:workingCandidate,
         payload:this.lastPayload,
-        initialMode:face?"face":"global",
-        initialFace:face||undefined,
+        initialMode:face?"face":(saved?savedMode:"global"),
+        initialFace:face||savedFace||undefined,
       });
     }catch(error){
       console.warn("Could not open reference alignment",error);

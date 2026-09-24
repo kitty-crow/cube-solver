@@ -59,6 +59,7 @@ let analysing = false;
 let allowSolve = false;
 let failedSubject = "";
 let scanRefreshTimer = null;
+let restoreAttemptedKey = "";
 
 async function refreshAvailability() {
   const payload = await savedPayload().catch(() => null);
@@ -66,6 +67,7 @@ async function refreshAvailability() {
     analysedKey = "";
     allowSolve = false;
     failedSubject = "";
+    restoreAttemptedKey = "";
     assistant.invalidate();
     assistant.panel.hidden = true;
     return;
@@ -73,6 +75,24 @@ async function refreshAvailability() {
   assistant.panel.hidden = false;
   assistant.lastPayload = payload;
   const key = payloadKey(payload);
+
+  if (key !== restoreAttemptedKey && !assistant.pending) {
+    restoreAttemptedKey = key;
+    const restored = await assistant.restorePersisted(payload).catch((error) => {
+      console.warn("Could not restore saved reference mapping", error);
+      return false;
+    });
+    if (restored) {
+      analysedKey = key;
+      allowSolve = Boolean(assistant.selectedEvidence());
+      failedSubject = "";
+      solveButton.disabled = false;
+      solveButton.textContent = allowSolve ? "Solve with reference" : "Choose a reference";
+      hideSemanticProgress();
+      return;
+    }
+  }
+
   if (key !== analysedKey && !assistant.pending) assistant.statusEl.textContent = "Ready to identify six faces";
 }
 
@@ -80,6 +100,7 @@ function invalidateForScanChange() {
   analysedKey = "";
   allowSolve = false;
   failedSubject = "";
+  restoreAttemptedKey = "";
   hideSemanticProgress();
   assistant.invalidate();
   clearTimeout(scanRefreshTimer);
@@ -92,7 +113,9 @@ window.addEventListener("picture-image-memory-cleared", () => {
   analysedKey = "";
   allowSolve = false;
   failedSubject = "";
+  restoreAttemptedKey = "";
   hideSemanticProgress();
+  assistant.clearPersistedSession?.().catch(() => {});
   assistant.invalidate();
   assistant.panel.hidden = true;
 });
@@ -148,6 +171,7 @@ solveButton.addEventListener("click", (event) => {
     assistant.lastPayload = payload;
     const result = await assistant.analyse(payload, currentSubject);
     analysedKey = key;
+    restoreAttemptedKey = key;
     failedSubject = "";
     allowSolve = Boolean(assistant.selectedEvidence());
     solveButton.textContent = allowSolve ? "Solve with reference" : "Choose a reference";
