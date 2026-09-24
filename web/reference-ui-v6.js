@@ -1,6 +1,6 @@
 import { ReferenceAssistant as PersistedReferenceAssistant } from "./reference-ui-v4.js";
 import { ReferenceAlignmentModal } from "./reference-aligner-v13.js";
-import { StickerIdentificationModal } from "./sticker-identification-ui-v2.js";
+import { StickerIdentificationModal } from "./sticker-identification-ui-v3.js";
 import { loadReferenceSession, saveReferenceSession } from "./reference-session.js";
 
 export class ReferenceAssistant extends PersistedReferenceAssistant{
@@ -46,120 +46,60 @@ export class ReferenceAssistant extends PersistedReferenceAssistant{
     });
   }
 
-  invalidate(){
-    this.identifier?.close?.();
-    this.identificationState=null;
-    super.invalidate();
-  }
-
-  async clearPersistedSession(){
-    this.identifier?.close?.();
-    this.identificationState=null;
-    return super.clearPersistedSession();
-  }
-
-  async matchCandidate(index){
-    const changing=index!==this.selectedIndex;
-    if(changing){
-      this.identifier?.close?.();
-      this.identificationState=null;
-    }
-    const candidate=await super.matchCandidate(index);
-    if(changing&&candidate?.usable)await this.persistIdentificationState(null);
-    this.renderIdentificationControl();
-    return candidate;
-  }
+  invalidate(){this.identifier?.close?.();this.identificationState=null;super.invalidate();}
+  async clearPersistedSession(){this.identifier?.close?.();this.identificationState=null;return super.clearPersistedSession();}
+  async matchCandidate(index){const changing=index!==this.selectedIndex;if(changing){this.identifier?.close?.();this.identificationState=null;}const candidate=await super.matchCandidate(index);if(changing&&candidate?.usable)await this.persistIdentificationState(null);this.renderIdentificationControl();return candidate;}
 
   async restorePersisted(payload){
-    const restored=await super.restorePersisted(payload);
-    if(!restored)return false;
-    const session=await loadReferenceSession(payload).catch(()=>null);
-    this.identificationState=session?.identificationState||null;
-    this.renderIdentificationControl();
+    const restored=await super.restorePersisted(payload);if(!restored)return false;
+    const session=await loadReferenceSession(payload).catch(()=>null);this.identificationState=session?.identificationState||null;this.renderIdentificationControl();
     if(this.identificationState?.resolved?.resolved){
-      this.statusEl.textContent="Restored saved reference and uniquely identified scramble.";
+      const exact=this.identificationState.resolved.exact!==false;
+      this.statusEl.textContent=exact?"Restored saved reference and uniquely identified scramble.":`Restored saved reference and high-confidence scramble (${Math.round(Number(this.identificationState.resolved.confidence||0)*100)}%).`;
     }
     return true;
   }
 
   async persistIdentificationState(state=this.identificationState){
-    const candidate=this.result?.candidates?.[this.selectedIndex];
-    if(!candidate||!this.lastPayload)return false;
-    return saveReferenceSession({
-      payload:this.lastPayload,
-      result:this.result,
-      selectedIndex:this.selectedIndex,
-      candidate,
-      draft:this.restoredDraft,
-      editorState:this.restoredDraft?{mode:this.restoredDraft.mode||"global",face:this.restoredDraft.face||"F"}:null,
-      identificationState:state,
-    });
+    const candidate=this.result?.candidates?.[this.selectedIndex];if(!candidate||!this.lastPayload)return false;
+    return saveReferenceSession({payload:this.lastPayload,result:this.result,selectedIndex:this.selectedIndex,candidate,draft:this.restoredDraft,editorState:this.restoredDraft?{mode:this.restoredDraft.mode||"global",face:this.restoredDraft.face||"F"}:null,identificationState:state});
   }
 
   selectedEvidence(){
-    const evidence=super.selectedEvidence();
-    if(!evidence)return null;
+    const evidence=super.selectedEvidence();if(!evidence)return null;
     if(this.identificationState){
-      evidence.reference={
-        ...(evidence.reference||{}),
-        manual_identification_session:{
-          version:Number(this.identificationState.version||1),
-          confirmations:this.identificationState.confirmations||{},
-          summary:this.identificationState.summary||null,
-        },
-      };
-      if(this.identificationState.resolved?.resolved){
-        evidence.reference.manual_identification=structuredClone(this.identificationState.resolved);
-      }
+      evidence.reference={...(evidence.reference||{}),manual_identification_session:{version:Number(this.identificationState.version||1),confirmations:this.identificationState.confirmations||{},ambiguities:this.identificationState.ambiguities||{},summary:this.identificationState.summary||null}};
+      if(this.identificationState.resolved?.resolved)evidence.reference.manual_identification=structuredClone(this.identificationState.resolved);
     }
     return evidence;
   }
 
   identificationResolved(){return Boolean(this.identificationState?.resolved?.resolved);}
-
-  async openStickerIdentification(){
-    const candidate=this.result?.candidates?.[this.selectedIndex];
-    if(!candidate||!this.lastPayload)throw new Error("Choose and align a reference before identifying the scramble.");
-    await this.identifier.open({candidate,payload:this.lastPayload,state:this.identificationState});
-  }
-
-  render(){
-    super.render();
-    this.renderIdentificationControl();
-  }
+  async openStickerIdentification(){const candidate=this.result?.candidates?.[this.selectedIndex];if(!candidate||!this.lastPayload)throw new Error("Choose and align a reference before identifying the scramble.");await this.identifier.open({candidate,payload:this.lastPayload,state:this.identificationState});}
+  render(){super.render();this.renderIdentificationControl();}
 
   renderIdentificationControl(){
     if(!this.sixWrap)return;
     let tools=this.sixWrap.querySelector("[data-sticker-identify-tools]");
     if(!tools){
-      tools=document.createElement("div");
-      tools.className="reference-aligner-launch";
-      tools.dataset.stickerIdentifyTools="";
-      const button=document.createElement("button");
-      button.type="button";
-      button.className="pages-button pages-button--primary";
-      button.dataset.stickerIdentifyOpen="";
-      button.addEventListener("click",()=>this.openStickerIdentification().catch(error=>{this.statusEl.textContent=error instanceof Error?error.message:String(error);}));
-      const note=document.createElement("p");
-      note.className="reference-aligner-launch__note";
-      note.dataset.stickerIdentifyNote="";
-      tools.append(button,note);
-      this.sixGrid?.insertAdjacentElement("afterend",tools);
+      tools=document.createElement("div");tools.className="reference-aligner-launch";tools.dataset.stickerIdentifyTools="";
+      const button=document.createElement("button");button.type="button";button.className="pages-button pages-button--primary";button.dataset.stickerIdentifyOpen="";button.addEventListener("click",()=>this.openStickerIdentification().catch(error=>{this.statusEl.textContent=error instanceof Error?error.message:String(error);}));
+      const note=document.createElement("p");note.className="reference-aligner-launch__note";note.dataset.stickerIdentifyNote="";tools.append(button,note);this.sixGrid?.insertAdjacentElement("afterend",tools);
     }
     const candidate=this.result?.candidates?.[this.selectedIndex],button=tools.querySelector("[data-sticker-identify-open]"),note=tools.querySelector("[data-sticker-identify-note]");
-    const available=Boolean(candidate?.usable&&Array.isArray(candidate.facePreviews)&&candidate.facePreviews.length===6&&Number(this.lastPayload?.size)===3);
-    tools.hidden=!available;if(!available)return;
+    const available=Boolean(candidate?.usable&&Array.isArray(candidate.facePreviews)&&candidate.facePreviews.length===6&&Number(this.lastPayload?.size)===3);tools.hidden=!available;if(!available)return;
     const summary=this.identificationState?.summary;
     if(this.identificationResolved()){
+      const resolved=this.identificationState.resolved,confidence=Math.round(Number(resolved?.confidence||1)*100),kind=resolved?.exact===false?"High-confidence legal scramble":"Unique legal scramble";
       button.textContent="Review identified scramble";
-      note.textContent=`Unique legal scramble · ${summary?.confirmedCount??Object.keys(this.identificationState?.confirmations||{}).length} manually confirmed · remaining stickers inferred mechanically.`;
+      note.textContent=`${kind}${resolved?.exact===false?` · ${confidence}%`:""} · ${summary?.confirmedCount??Object.keys(this.identificationState?.confirmations||{}).length} confirmed · ${summary?.ambiguousCount||0} ambiguous hints.`;
     }else if(summary){
       button.textContent="Continue identifying stickers";
-      const states=Number(summary.legalStateCount||0).toLocaleString();
-      note.textContent=`${summary.confirmedCount||0} confirmed · ${summary.inferredCount||0} inferred · ${summary.unresolvedCount||0} unresolved · ${states} legal state${Number(summary.legalStateCount)===1?"":"s"}.`;
+      const states=Number(summary.legalStateCount||0).toLocaleString(),confidence=Math.round(Number(summary.stateConfidence||0)*100);
+      note.textContent=`${summary.confirmedCount||0} confirmed · ${summary.ambiguousCount||0} ambiguous · ${summary.inferredCount||0} inferred · ${summary.unresolvedCount||0} unresolved · ${states} legal state${Number(summary.legalStateCount)===1?"":"s"} · best state ${confidence}%.`;
     }else{
       button.textContent="Identify scrambled stickers";
-      note.textContent="After the solved wrap is aligned, identify only the ambiguous physical stickers. The reference is frozen; this stage permits surface panning and 90° quarter-turns only.";
+      note.textContent="Hard confirmations are exact. If a segment looks right but is not certain, mark it ambiguous: it becomes a 50% human hint while cubie type, adjacency, parity and image evidence resolve the rest.";
     }
   }
 }
