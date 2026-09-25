@@ -1,4 +1,5 @@
 const MODE_SETTING="picture-cube-mode";
+const MODE_CHANNEL="picture-cube-mode";
 const PICTURE_MODE="picture";
 const SOLID_MODE="solid-colour";
 
@@ -6,6 +7,7 @@ const modeSelect=document.querySelector("#cube-mode");
 const sizeSelect=document.querySelector("#cube-size");
 const solveButton=document.querySelector("#solve-cube");
 const workerStatus=document.querySelector("#worker-status");
+const channel=typeof BroadcastChannel==="function"?new BroadcastChannel(MODE_CHANNEL):null;
 
 function normaliseMode(value){return value===SOLID_MODE?SOLID_MODE:PICTURE_MODE;}
 function currentSize(){return Number(sizeSelect?.value||3);}
@@ -32,6 +34,10 @@ function syncSolveLabel(){
   }
 }
 
+function broadcastMode(){
+  channel?.postMessage({type:"mode",mode:currentMode()});
+}
+
 function applyMode(announce=false){
   syncAvailability();
   const mode=currentMode();
@@ -42,8 +48,15 @@ function applyMode(announce=false){
       ?"Solid colour mode · exactly six colours"
       :"Picture mode · artwork matching enabled";
   }
+  broadcastMode();
   window.dispatchEvent(new CustomEvent("picture-cube-mode-changed",{detail:{mode}}));
   queueMicrotask(syncSolveLabel);
+}
+
+if(channel){
+  channel.addEventListener("message",event=>{
+    if(event.data?.type==="request-mode")broadcastMode();
+  });
 }
 
 if(modeSelect){
