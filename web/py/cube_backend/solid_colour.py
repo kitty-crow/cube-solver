@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import base64
+import json
 import math
 import statistics
 
@@ -187,3 +189,49 @@ def reconstruct_solid_colour_3x3(raw: bytes, tile_size: int) -> dict:
         "colour_count": 6,
         "method": "six-centre-colours+exact-cubie-constraints",
     }
+
+
+def solve_solid_colour_payload(payload_json: str) -> str:
+    """Solve a solid-colour 3×3 payload without any picture-analysis pipeline."""
+    from rubik_solver import Cube, solve
+
+    payload = json.loads(payload_json)
+    size = int(payload.get("size", 3))
+    if size != 3:
+        raise ValueError("Solid-colour mode currently supports 3×3×3 cubes")
+    tile_size = int(payload["tile_size"])
+    raw = base64.b64decode(payload["rgb_b64"])
+    reconstruction = reconstruct_solid_colour_3x3(raw, tile_size)
+    state = reconstruction["state"]
+    cube = Cube.from_string(state)
+    valid = cube.verify()
+    if valid is not True:
+        raise ValueError(f"Detected six-colour cube is not legal: {valid}")
+
+    solution = solve(cube)
+    if solution is None:
+        raise RuntimeError("Two-phase solver could not solve the detected colour state")
+    if not isinstance(solution, str):
+        solution = " ".join(str(value) for value in solution)
+    solution = solution.strip()
+
+    check = Cube.from_string(state)
+    if solution:
+        check.move(solution)
+    if not check.is_solved():
+        raise RuntimeError("Solver returned a sequence that did not solve the detected colour state")
+
+    moves = solution.split() if solution else []
+    result = {
+        **reconstruction,
+        "solution": solution,
+        "moves": moves,
+        "move_count": len(moves),
+        "cubie_move_count": len(moves),
+        "centre_move_count": 0,
+        "centre_solution": "",
+        "center_rotations": [0, 0, 0, 0, 0, 0],
+        "solid_colour": True,
+        "selection_reason": "six detected centre colours plus exact legal edge/corner assignment",
+    }
+    return json.dumps(result, separators=(",", ":"))
