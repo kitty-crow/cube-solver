@@ -8,6 +8,7 @@ const CAPTURE_SIZE = 768;
 const RUNTIME_DB = "picture-cube-solver-runtime";
 const RUNTIME_DB_VERSION = 2;
 const ROUNDED_SETTING = "picture-cube-rounded-cubies";
+const MODE_SETTING = "picture-cube-mode";
 
 const $ = (selector) => document.querySelector(selector);
 const video = $("#camera");
@@ -366,13 +367,17 @@ function stabilityLoop() {
 }
 
 function preparePayload() {
-  return buildPayloadFromCaptures(
+  const prepared = buildPayloadFromCaptures(
     captures,
     captureRotations,
     cubeSize,
     TILE_SIZE,
     Boolean(roundedToggle?.checked),
   );
+  const mode = localStorage.getItem(MODE_SETTING) === "solid-colour" ? "solid-colour" : "picture";
+  prepared.payload.cube_mode = mode;
+  prepared.payload.solid_colour = mode === "solid-colour";
+  return prepared;
 }
 
 async function solveCube() {
