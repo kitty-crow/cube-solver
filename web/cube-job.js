@@ -5,6 +5,7 @@ import { clearReferenceSession, exportReferenceSession, importReferenceSession }
 const FACE_ORDER=["F","R","B","L","U","D"];
 const TILE_SIZE=48;
 const ROUNDED_SETTING="picture-cube-rounded-cubies";
+const MODE_SETTING="picture-cube-mode";
 const FORMAT="picture-cube-job";
 const FORMAT_VERSION=1;
 const TAR_BLOCK=512;
@@ -133,8 +134,9 @@ export async function buildCurrentCubeJob(){
   const scan=await loadScan();
   if(!scan||scan.captures.size!==6)throw new Error("Capture all six faces before downloading the job.");
   const rounded=localStorage.getItem(ROUNDED_SETTING)==="1";
+  const cubeMode=localStorage.getItem(MODE_SETTING)==="solid-colour"?"solid-colour":"picture";
   const prepared=buildPayloadFromCaptures(scan.captures,scan.rotations,scan.size,TILE_SIZE,rounded);
-  const session=await exportReferenceSession(prepared.payload).catch(()=>null);
+  const session=cubeMode==="picture"?await exportReferenceSession(prepared.payload).catch(()=>null):null;
   const entries=[];
   const facePaths={};
   for(const face of FACE_ORDER){
@@ -164,6 +166,7 @@ export async function buildCurrentCubeJob(){
     exportedAt:new Date().toISOString(),
     scan:{
       size:Number(scan.size),
+      cubeMode,
       roundedCubies:rounded,
       rotations:Object.fromEntries(scan.rotations),
       faces:facePaths,
@@ -207,16 +210,19 @@ export async function loadCubeJob(file){
   }
   const rotations=new Map(FACE_ORDER.map(face=>[face,Number(manifest.scan?.rotations?.[face])||0]));
   const rounded=Boolean(manifest.scan?.roundedCubies);
+  const requestedMode=manifest.scan?.cubeMode==="solid-colour"?"solid-colour":"picture";
+  const cubeMode=requestedMode==="solid-colour"&&size===3?"solid-colour":"picture";
   localStorage.setItem(ROUNDED_SETTING,rounded?"1":"0");
+  localStorage.setItem(MODE_SETTING,cubeMode);
   await saveScan(size,captures,rotations);
 
   const prepared=buildPayloadFromCaptures(captures,rotations,size,TILE_SIZE,rounded);
-  if(manifest.reference?.session){
+  if(cubeMode==="picture"&&manifest.reference?.session){
     const path=manifest.reference.imagePath;
     const bytes=requireEntry(entries,path);
     const referenceBlob=new Blob([bytes],{type:String(manifest.reference.imageType||"application/octet-stream")});
     await importReferenceSession(prepared.payload,manifest.reference.session,referenceBlob);
-  }else{
+  }else if(cubeMode==="picture"){
     await clearReferenceSession();
   }
   return manifest;
