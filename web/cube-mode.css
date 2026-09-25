@@ -1,0 +1,9 @@
+.tool-head { flex-wrap: wrap; }
+.tool-head h1 { flex: 1 1 18rem; }
+
+@media (max-width: 700px) {
+  .tool-head { justify-content: flex-start; }
+  .tool-head h1 { flex-basis: 100%; }
+  .cube-size-picker { flex: 1 1 8rem; min-width: 0; }
+  .cube-size-picker select { width: 100%; min-width: 0; }
+}
