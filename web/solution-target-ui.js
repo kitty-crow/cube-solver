@@ -1,9 +1,12 @@
 const DB_NAME="picture-cube-solver-runtime";
 const DB_VERSION=2;
 const STORE="reference";
+const MODE_SETTING="picture-cube-mode";
 const FACE_NAMES=["U","R","F","D","L","B"];
 const DISPLAY_ORDER=["F","R","B","L","U","D"];
 const FACE_LABELS={U:"Top",R:"Right",F:"Front",D:"Bottom",L:"Left",B:"Back"};
+
+function solidColourMode(){return window.pictureCubeMode?.isSolidColour?.()||localStorage.getItem(MODE_SETTING)==="solid-colour";}
 
 function installStyles(){
   if(document.querySelector("#solution-target-styles"))return;
@@ -63,7 +66,7 @@ function ensurePanel(){
 }
 
 async function render(){
-  const result=document.querySelector("#result-panel"),panel=ensurePanel();if(!result||!panel||result.hidden){if(panel)panel.hidden=true;return;}
+  const result=document.querySelector("#result-panel"),panel=ensurePanel();if(!result||!panel||result.hidden||solidColourMode()){if(panel)panel.hidden=true;return;}
   const evidence=await loadReference().catch(error=>{console.warn("Could not load solved target",error);return null;});
   const ref=evidence?.reference||{},previews=Array.isArray(ref.solved_face_previews)?ref.solved_face_previews:[];
   if(previews.length!==6){panel.hidden=true;return;}
@@ -87,5 +90,6 @@ const result=document.querySelector("#result-panel");
 if(result){
   new MutationObserver(()=>render()).observe(result,{attributes:true,attributeFilter:["hidden"]});
   window.addEventListener("picture-reference-ready",()=>{if(!result.hidden)render();});
+  window.addEventListener("picture-cube-mode-changed",()=>render());
   render();
 }
