@@ -225,7 +225,7 @@ async function runVisualEnsemble(payload) {
 async function loadBackendFiles() {
   const files = [
     "__init__.py", "geometry.py", "vision.py", "reconstruct.py", "centres.py", "centre_fit.py",
-    "generic.py", "surface.py", "pocket.py", "bigcube.py", "backend.py",
+    "generic.py", "surface.py", "pocket.py", "bigcube.py", "solid_colour.py", "backend.py",
   ];
   pyodide.FS.mkdirTree("/app/cube_backend");
   for (const file of files) {
@@ -279,7 +279,32 @@ os.environ["RUBIK_SOLVER_CACHE_DIR"] = "/solver-cache/rubik_solver"
   }
 }
 
+async function solveSolidColour(payload) {
+  const size = Number(payload.size || 3);
+  if (size !== 3) throw new Error("Solid-colour mode currently supports 3×3×3 cubes");
+  destroyMlWorker();
+  status("colour", "Solid-colour mode · skipping artwork and image search…", 0.08);
+  await initialisePython(size);
+  status("colour-detect", "Detecting exactly six sticker colours…", 0.88);
+  const payloadJson = JSON.stringify(payload);
+  pyodide.globals.set("_scan_payload_json", payloadJson);
+  status("colour-legal", "Matching colours to a legal cube state…", 0.94);
+  const resultJson = await pyodide.runPythonAsync(`
+from cube_backend.solid_colour import solve_solid_colour_payload
+solve_solid_colour_payload(_scan_payload_json)
+`);
+  const result = JSON.parse(String(resultJson));
+  status("complete", "Solved by six colours", 1);
+  postMessage({ type: "solution", result });
+  status("ready", "Ready", null);
+}
+
 async function solve(payload) {
+  if (payload?.cube_mode === "solid-colour" || payload?.solid_colour === true) {
+    await solveSolidColour(payload);
+    return;
+  }
+
   const size = Number(payload.size || 3);
   const fingerprint = scanFingerprint(payload);
   status("checkpoint", "Checking saved visual work…", 0.02);
