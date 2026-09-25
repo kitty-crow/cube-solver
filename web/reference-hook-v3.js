@@ -4,8 +4,14 @@ import { ReferenceAssistant } from "./reference-ui-v6.js";
 
 const TILE_SIZE = 48;
 const ROUNDED_SETTING = "picture-cube-rounded-cubies";
+const MODE_SETTING = "picture-cube-mode";
+
+function solidColourMode(){
+  return window.pictureCubeMode?.isSolidColour?.()||localStorage.getItem(MODE_SETTING)==="solid-colour";
+}
 
 async function savedPayload() {
+  if(solidColourMode())return null;
   const saved = await loadScan();
   if (!saved || saved.captures.size !== 6) return null;
   const rounded = localStorage.getItem(ROUNDED_SETTING) === "1";
@@ -47,6 +53,7 @@ function hideSemanticProgress() {
 }
 
 function updateReferenceSolveLabel() {
+  if(solidColourMode())return;
   if (!assistant.selectedEvidence()) return;
   solveButton.textContent = assistant.identificationResolved?.() ? "Solve identified cube" : "Identify stickers";
 }
@@ -67,6 +74,16 @@ let scanRefreshTimer = null;
 let restoreAttemptedKey = "";
 
 async function refreshAvailability() {
+  if(solidColourMode()){
+    analysedKey="";
+    allowSolve=false;
+    failedSubject="";
+    restoreAttemptedKey="";
+    hideSemanticProgress();
+    assistant.invalidate();
+    assistant.panel.hidden=true;
+    return;
+  }
   const payload = await savedPayload().catch(() => null);
   if (!payload) {
     analysedKey = "";
@@ -114,6 +131,7 @@ function invalidateForScanChange() {
 
 new MutationObserver(invalidateForScanChange).observe(reviewGrid, { childList: true, subtree: true });
 window.addEventListener("picture-scan-geometry-changed", invalidateForScanChange);
+window.addEventListener("picture-cube-mode-changed", invalidateForScanChange);
 window.addEventListener("picture-image-memory-cleared", () => {
   analysedKey = "";
   allowSolve = false;
@@ -125,6 +143,7 @@ window.addEventListener("picture-image-memory-cleared", () => {
   assistant.panel.hidden = true;
 });
 window.addEventListener("picture-reference-ready", () => {
+  if(solidColourMode())return;
   if (!assistant.selectedEvidence()) return;
   allowSolve = true;
   failedSubject = "";
@@ -133,6 +152,7 @@ window.addEventListener("picture-reference-ready", () => {
   updateReferenceSolveLabel();
 });
 window.addEventListener("picture-stickers-resolved", () => {
+  if(solidColourMode())return;
   allowSolve = true;
   hideSemanticProgress();
   solveButton.disabled = false;
@@ -151,6 +171,12 @@ assistant.searchButton.addEventListener("click", () => {
 });
 
 solveButton.addEventListener("click", (event) => {
+  if(solidColourMode()){
+    hideSemanticProgress();
+    assistant.panel.hidden=true;
+    return;
+  }
+
   const currentSubject = assistant.subjectEl.value.trim();
   const subjectMatches = !currentSubject || currentSubject === assistant.lastSubject || currentSubject === failedSubject;
   const evidence = assistant.selectedEvidence();
