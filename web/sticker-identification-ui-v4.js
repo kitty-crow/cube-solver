@@ -18,7 +18,8 @@ function installV4Styles(){
     .sticker-id__recommendation-title { font-size:.72rem; font-weight:800; opacity:.82; }
     .sticker-id__recommendation-list { display:flex; gap:.4rem; overflow-x:auto; max-width:100%; min-width:0; padding:.08rem .04rem .28rem; scrollbar-width:thin; }
     .sticker-id__recommendation-list .pages-button { flex:0 0 auto; max-width:min(17rem,78vw); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-    .sticker-id__recommendation-list .pages-button[data-engine-best="true"] { outline:2px solid color-mix(in srgb,var(--pages-accent) 76%,transparent); outline-offset:1px; }
+    .sticker-id__recommendation-list .pages-button[data-selected="true"] { outline:2px solid color-mix(in srgb,var(--pages-accent) 82%,transparent); outline-offset:1px; background:color-mix(in srgb,var(--pages-accent) 13%,transparent); }
+    .sticker-id__recommendation-list .pages-button[data-engine-best="true"][data-selected="false"] { font-weight:800; }
     .sticker-id__recommendation-note { margin:0; font-size:.68rem; opacity:.7; }
     @media(max-width:430px){
       .sticker-id__recommendation-tools { align-items:stretch; }
@@ -97,30 +98,37 @@ export class StickerIdentificationModal extends ConfidenceStickerIdentificationM
     return this.recommendationOptions(sticker)[0]||sticker?.best||sticker?.domain?.[0]||null;
   }
 
-  applySuggestion(option,{announce=false}={}){
+  applySuggestion(option,{announce=true,reset=false}={}){
     if(!option)return;
     this.pan=panForFacelet(option.target);
     this.quarterTurn=uiQuarterFromGeometry(option.rotation);
     this.render();
     this.queueSave();
-    if(announce)this.messageEl.textContent=`Reset to engine pick: ${labelForFacelet(option.target)} at ${this.quarterTurn*90}°.`;
+    if(announce){
+      const prefix=reset?"Reset to engine pick":"Selected suggestion";
+      this.messageEl.textContent=`${prefix}: ${labelForFacelet(option.target)} at ${this.quarterTurn*90}°.`;
+    }
   }
 
   resetToEngineSuggestion(){
-    this.applySuggestion(this.engineSuggestion(),{announce:true});
+    this.applySuggestion(this.engineSuggestion(),{announce:true,reset:true});
   }
 
   renderSuggestions(sticker){
     this.suggestionsEl.textContent="";
     this.suggestionsEl.classList.add("sticker-id__recommendation-list");
     const options=this.recommendationOptions(sticker),limit=Math.min(this.recommendationLimit,options.length),best=options[0]||null;
+    const currentTarget=Number(this.currentTarget()),currentRotation=Number(this.quarterTurn);
     for(let index=0;index<limit;index++){
       const option=options[index],uiRotation=uiQuarterFromGeometry(option.rotation),button=document.createElement("button");
+      const selected=currentTarget===Number(option.target)&&currentRotation===uiRotation;
       button.type="button";
       button.className="pages-button pages-button--quiet";
       button.dataset.engineBest=String(index===0);
-      const score=Number(option.score);
-      button.textContent=`${index+1}. ${labelForFacelet(option.target)} · ${uiRotation*90}°${Number.isFinite(score)?` · ${Math.round(score*100)}%`:""}`;
+      button.dataset.selected=String(selected);
+      button.setAttribute("aria-pressed",String(selected));
+      const score=Number(option.score),bestPrefix=index===0?"★ ":"";
+      button.textContent=`${bestPrefix}${index+1}. ${labelForFacelet(option.target)} · ${uiRotation*90}°${Number.isFinite(score)?` · ${Math.round(score*100)}%`:""}`;
       button.title=index===0?"Engine's current best legal suggestion":"Alternative legal segment suggested by the engine";
       button.addEventListener("click",()=>this.applySuggestion(option));
       this.suggestionsEl.appendChild(button);
