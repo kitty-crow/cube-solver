@@ -11,11 +11,18 @@ const EVIDENCE_STORE = "evidence";
 const REFERENCE_STORE = "reference";
 const VISUAL_EVIDENCE_VERSION = 2;
 const REFERENCE_EVIDENCE_VERSION = 2;
+const MODE_CHANNEL = "picture-cube-mode";
 let pyodide = null;
 let readyPromise = null;
 let solverTablesReady = false;
 let mlWorker = null;
 let mlRequest = null;
+let cubeMode = "picture";
+const modeChannel = typeof BroadcastChannel === "function" ? new BroadcastChannel(MODE_CHANNEL) : null;
+modeChannel?.addEventListener("message", (event) => {
+  if (event.data?.type === "mode") cubeMode = event.data.mode === "solid-colour" ? "solid-colour" : "picture";
+});
+modeChannel?.postMessage({ type: "request-mode" });
 
 function status(stage, detail = "", progress = null) {
   postMessage({ type: "status", stage, detail, progress });
@@ -300,7 +307,7 @@ solve_solid_colour_payload(_scan_payload_json)
 }
 
 async function solve(payload) {
-  if (payload?.cube_mode === "solid-colour" || payload?.solid_colour === true) {
+  if (cubeMode === "solid-colour" || payload?.cube_mode === "solid-colour" || payload?.solid_colour === true) {
     await solveSolidColour(payload);
     return;
   }
