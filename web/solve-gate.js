@@ -27,8 +27,9 @@ function needsStickerIdentification(){
 function syncLabel(){
   if(!solveButton)return;
   if(solidColourMode()){
-    const text=String(solveButton.textContent||"");
-    if(!/^(Starting|Preparing|Solving)/.test(text))solveButton.textContent="Solve by colours";
+    const text=String(solveButton.textContent||"").trim();
+    if(text==="Solve by colours"||/^(Starting|Preparing|Solving)/.test(text))return;
+    solveButton.textContent="Solve by colours";
     return;
   }
   if(!needsStickerIdentification())return;
