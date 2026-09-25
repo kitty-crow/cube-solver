@@ -1,5 +1,10 @@
 const solveButton=document.querySelector("#solve-cube");
 const workerStatus=document.querySelector("#worker-status");
+const MODE_SETTING="picture-cube-mode";
+
+function solidColourMode(){
+  return window.pictureCubeMode?.isSolidColour?.()||localStorage.getItem(MODE_SETTING)==="solid-colour";
+}
 
 function assistantCandidate(){
   const assistant=window.pictureReference;
@@ -8,6 +13,7 @@ function assistantCandidate(){
 }
 
 function needsStickerIdentification(){
+  if(solidColourMode())return false;
   const{assistant,candidate}=assistantCandidate();
   return Boolean(
     assistant&&
@@ -19,13 +25,19 @@ function needsStickerIdentification(){
 }
 
 function syncLabel(){
-  if(!solveButton||!needsStickerIdentification())return;
+  if(!solveButton)return;
+  if(solidColourMode()){
+    const text=String(solveButton.textContent||"");
+    if(!/^(Starting|Preparing|Solving)/.test(text))solveButton.textContent="Solve by colours";
+    return;
+  }
+  if(!needsStickerIdentification())return;
   if(solveButton.textContent!=="Identify stickers")solveButton.textContent="Identify stickers";
   if(solveButton.disabled)solveButton.disabled=false;
 }
 
 solveButton?.addEventListener("click",event=>{
-  if(!needsStickerIdentification())return;
+  if(solidColourMode()||!needsStickerIdentification())return;
   event.preventDefault();
   event.stopImmediatePropagation();
   const{assistant}=assistantCandidate();
@@ -40,7 +52,8 @@ if(solveButton){
   new MutationObserver(syncLabel).observe(solveButton,{childList:true,characterData:true,subtree:true,attributes:true,attributeFilter:["disabled"]});
 }
 window.addEventListener("picture-reference-ready",syncLabel);
+window.addEventListener("picture-cube-mode-changed",syncLabel);
 window.addEventListener("picture-stickers-resolved",()=>{
-  if(solveButton)solveButton.textContent="Solve identified cube";
+  if(solveButton&&!solidColourMode())solveButton.textContent="Solve identified cube";
 });
 setTimeout(syncLabel,400);
