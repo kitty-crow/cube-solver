@@ -1,6 +1,6 @@
 import { ReferenceAssistant as PersistedReferenceAssistant } from "./reference-ui-v4.js";
 import { ReferenceAlignmentModal } from "./reference-aligner-v13.js";
-import { StickerIdentificationModal } from "./sticker-identification-ui-v4.js";
+import { StickerIdentificationModal } from "./sticker-identification-ui-v6.js";
 import { loadReferenceSession, saveReferenceSession } from "./reference-session.js";
 
 export class ReferenceAssistant extends PersistedReferenceAssistant{
