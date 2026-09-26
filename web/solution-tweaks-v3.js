@@ -2,6 +2,7 @@ import "./solution-tweaks-v2.js";
 
 const CONFLICT_COPY=
   "Your current correction remains authoritative. All non-authoritative solved-state assumptions have been released automatically. The fixed reference has not been changed. If a conflict remains, it is between observations already marked authoritative, not with this correction.";
+const CALCULATE_COPY="Calculate legal moves";
 
 function polishSolvedTweakUi(){
   const root=document.querySelector(".solution-tweak-modal");
@@ -26,8 +27,11 @@ function polishSolvedTweakUi(){
     playback.dataset.mainPlayerOnly="true";
   }
 
+  // MutationObserver callbacks must be idempotent. Setting textContent even to
+  // the same value emits another childList mutation in browsers and previously
+  // created a self-sustaining observer loop as soon as this modal was opened.
   const calculate=root.querySelector("[data-tweak-calculate]");
-  if(calculate)calculate.textContent="Calculate legal moves";
+  if(calculate&&calculate.textContent!==CALCULATE_COPY)calculate.textContent=CALCULATE_COPY;
 
   // The model performs a full authoritative rebuild before reaching this state.
   // Do not tell the user to sacrifice another cubie manually or imply that the
@@ -58,5 +62,8 @@ window.addEventListener("picture-tweak-solution",event=>{
 });
 
 const observer=new MutationObserver(polishSolvedTweakUi);
-observer.observe(document.documentElement,{childList:true,subtree:true,characterData:true});
+// childList is sufficient for modal creation and textContent changes. Avoid
+// characterData observation so ordinary live status text cannot cause needless
+// repeated callbacks while the user is interacting with the modal.
+observer.observe(document.documentElement,{childList:true,subtree:true});
 polishSolvedTweakUi();
