@@ -20,6 +20,7 @@ const PROBABLE_THRESHOLD=.93;
 const MIN_HUMAN_EQUIVALENT=6;
 const VISUAL_WEIGHT=.35;
 const AMBIGUOUS_WEIGHT=1.3;
+const MAX_SOLUTION_VARIANTS=4;
 
 const centreSet=new Set(CENTRE_FACELETS);
 const faceOf=(facelet)=>Math.floor(Number(facelet)/9);
@@ -127,19 +128,19 @@ function topFamilySolutions(domains,modulus,requiredParity,scoreFn,limit=2){
   }
   return walk(0,0,0,0);
 }
-function rankedLegalSolutions(edgeDomains,cornerDomains,scores,ambiguities){
-  const all=[],scoreFn=candidate=>candidateEvidenceScore(candidate,scores,ambiguities);
+function rankedLegalSolutions(edgeDomains,cornerDomains,scores,ambiguities,limit=MAX_SOLUTION_VARIANTS){
+  const all=[],scoreFn=candidate=>candidateEvidenceScore(candidate,scores,ambiguities),familyLimit=Math.max(3,limit);
   for(let parity=0;parity<2;parity++){
-    const edges=topFamilySolutions(edgeDomains,2,parity,scoreFn,2),corners=topFamilySolutions(cornerDomains,3,parity,scoreFn,2);
+    const edges=topFamilySolutions(edgeDomains,2,parity,scoreFn,familyLimit),corners=topFamilySolutions(cornerDomains,3,parity,scoreFn,familyLimit);
     for(const edge of edges)for(const corner of corners)all.push({score:edge.score+corner.score,parity,edges:edge.choices,corners:corner.choices});
   }
-  all.sort((a,b)=>b.score-a.score);const unique=[],seen=new Set();for(const item of all){const signature=[...item.edges,...item.corners].map(choice=>choice.id).join("|");if(seen.has(signature))continue;seen.add(signature);unique.push(item);if(unique.length>=2)break;}return unique;
+  all.sort((a,b)=>b.score-a.score);const unique=[],seen=new Set();for(const item of all){const signature=[...item.edges,...item.corners].map(choice=>choice.id).join("|");if(seen.has(signature))continue;seen.add(signature);unique.push(item);if(unique.length>=limit)break;}return unique;
 }
-function payloadFromSolution(solution,confirmations,ambiguities,centerRotations,legalStateCount,confidence,exact){
+function payloadFromSolution(solution,confirmations,ambiguities,centerRotations,legalStateCount,confidence,exact,rank=0){
   if(!solution)return null;const state=Array.from({length:54},(_,i)=>FACE_NAMES[Math.floor(i/9)]),placements={};
   for(const centre of CENTRE_FACELETS)placements[centre]={target:centre,rotation:Number(centerRotations?.[Math.floor(centre/9)]||0),source:"centre"};
   for(const candidate of[...solution.edges,...solution.corners])for(const placement of candidate.placements){state[placement.tile]=FACE_NAMES[placement.targetFace];placements[placement.tile]={target:placement.target,rotation:placement.rotation,source:confirmations[placement.tile]?"confirmed":ambiguities[placement.tile]?"ambiguous":"inferred"};}
-  return{version:2,resolved:true,exact:Boolean(exact),resolution_kind:exact?"unique":"probable",confidence:Number(confidence),state:state.join(""),center_rotations:Array.from({length:6},(_,face)=>((Number(centerRotations?.[face])||0)%4+4)%4),placements,confirmed:structuredClone(confirmations),ambiguous:structuredClone(ambiguities),legal_state_count:Number(legalStateCount)};
+  return{version:2,resolved:true,exact:Boolean(exact),resolution_kind:exact?"unique":"probable",confidence:Number(confidence),solution_rank:Number(rank),evidence_score:Number(solution.score||0),state:state.join(""),center_rotations:Array.from({length:6},(_,face)=>((Number(centerRotations?.[face])||0)%4+4)%4),placements,confirmed:structuredClone(confirmations),ambiguous:structuredClone(ambiguities),legal_state_count:Number(legalStateCount)};
 }
 
 export function analyseStickerConstraints({confirmations={},ambiguities={},absoluteF32B64="",centerRotations=[]}={}){
@@ -163,6 +164,15 @@ export function analyseStickerConstraints({confirmations={},ambiguities={},absol
   unresolved.sort((a,b)=>(a.status==="ambiguous")-(b.status==="ambiguous")||b.priority-a.priority||b.domain.length-a.domain.length||a.tile-b.tile);
 
   const ranked=rankedLegalSolutions(edgeDomains,cornerDomains,scores,soft),bestState=ranked[0]||null,runnerUp=ranked[1]||null,gap=bestState?Math.max(0,bestState.score-(runnerUp?.score??-Infinity)):0,scoreConfidence=!runnerUp&&bestState?1:1/(1+Math.exp(-2.2*gap)),coverage=clamp((confirmedCount+inferredCount+.5*ambiguousCount)/48),stateConfidence=clamp(1-(1-scoreConfidence)*(1-.75*coverage)),humanEquivalent=confirmedCount+.5*ambiguousCount,exact=legalStateCount===1,probable=!exact&&humanEquivalent>=MIN_HUMAN_EQUIVALENT&&stateConfidence>=PROBABLE_THRESHOLD;
-  const resolved=(exact||probable)?payloadFromSolution(bestState,hard,soft,centerRotations,legalStateCount,exact?1:stateConfidence,exact):null;
-  return{ok:true,confirmations:hard,ambiguities:soft,legalStateCount,legalStateCountCapped:legalStateCount>=COUNT_CAP,edgeCounts,cornerCounts,confirmedCount,inferredCount,ambiguousCount,unresolvedCount,stickers,nextTile:resolved?null:(unresolved[0]?.tile??null),resolved,stateConfidence,scoreConfidence,confidenceGap:Number.isFinite(gap)?gap:null,humanEquivalent,probableThreshold:PROBABLE_THRESHOLD,minHumanEquivalent:MIN_HUMAN_EQUIVALENT,readyToSolve:Boolean(resolved),resolutionKind:resolved?.resolution_kind||null};
+  const resolved=(exact||probable)?payloadFromSolution(bestState,hard,soft,centerRotations,legalStateCount,exact?1:stateConfidence,exact,0):null;
+  if(resolved&&!exact&&ranked.length>1){
+    const bestScore=Number(bestState?.score||0);
+    resolved.alternatives=ranked.slice(1,MAX_SOLUTION_VARIANTS).map((candidate,index)=>{
+      const delta=Math.max(0,bestScore-Number(candidate.score||0));
+      const relative=Math.exp(-delta);
+      const confidence=clamp(stateConfidence*relative,0,stateConfidence);
+      return payloadFromSolution(candidate,hard,soft,centerRotations,legalStateCount,confidence,false,index+1);
+    }).filter(Boolean);
+  }
+  return{ok:true,confirmations:hard,ambiguities:soft,legalStateCount,legalStateCountCapped:legalStateCount>=COUNT_CAP,edgeCounts,cornerCounts,confirmedCount,inferredCount,ambiguousCount,unresolvedCount,stickers,nextTile:resolved?null:(unresolved[0]?.tile??null),resolved,stateConfidence,scoreConfidence,confidenceGap:Number.isFinite(gap)?gap:null,humanEquivalent,probableThreshold:PROBABLE_THRESHOLD,minHumanEquivalent:MIN_HUMAN_EQUIVALENT,readyToSolve:Boolean(resolved),resolutionKind:resolved?.resolution_kind||null,solutionVariantCount:resolved?1+(resolved.alternatives?.length||0):0};
 }
