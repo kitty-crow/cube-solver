@@ -128,6 +128,7 @@ if(reviewGrid)new MutationObserver(syncSolveStage).observe(reviewGrid,{childList
 if(scanCounter)new MutationObserver(syncCompletionCopy).observe(scanCounter,{childList:true,characterData:true,subtree:true});
 if(scanTitle)new MutationObserver(syncCompletionCopy).observe(scanTitle,{childList:true,characterData:true,subtree:true});
 if(solveButton)new MutationObserver(canonicaliseSolveLabel).observe(solveButton,{childList:true,characterData:true,subtree:true});
+window.addEventListener("picture-main-solution",()=>document.querySelector("[data-tweak-reset]")?.click());
 
 installPageChromeStyles();
 syncSolveStage();
