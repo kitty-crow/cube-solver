@@ -38,6 +38,15 @@ function captureSolution(result){
   queueMicrotask(renderControls);
 }
 
+function showTweakError(result){
+  queueMicrotask(()=>{
+    const status=document.querySelector("[data-tweak-status]");
+    const button=document.querySelector("[data-tweak-calculate]");
+    if(status){status.textContent=result?.error||"That tweaked target cannot be reached legally.";status.dataset.ok="false";}
+    if(button)button.disabled=true;
+  });
+}
+
 function captureWorker(worker,url){
   if(!String(url||"").includes("solver-worker.js"))return;
   state.worker=worker;
@@ -48,6 +57,7 @@ function captureWorker(worker,url){
     if(msg.type==="solution"&&(kind==="post-solve-tweak"||kind==="post-solve-tweak-error")){
       event.stopImmediatePropagation?.();
       window.dispatchEvent(new CustomEvent(kind==="post-solve-tweak"?"picture-tweak-solution":"picture-tweak-error",{detail:msg.result}));
+      if(kind==="post-solve-tweak-error")showTweakError(msg.result);
       return;
     }
     if(msg.type!=="solution"||msg.result?.__solutionUiSynthetic)return;
