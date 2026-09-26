@@ -4,6 +4,17 @@ const CONFLICT_COPY=
   "Your current correction remains authoritative. All non-authoritative solved-state assumptions have been released automatically. The fixed reference has not been changed. If a conflict remains, it is between observations already marked authoritative, not with this correction.";
 const CALCULATE_COPY="Calculate legal moves";
 
+function installTweakSafetyStyles(){
+  if(document.querySelector("#solution-tweak-safety-styles"))return;
+  const style=document.createElement("style");
+  style.id="solution-tweak-safety-styles";
+  // Blurring a fixed overlay above the live WebGL cube can force expensive
+  // full-screen recomposition in iOS/WebKit. The opaque scrim already provides
+  // enough separation, so keep the tweak editor on the cheap compositor path.
+  style.textContent=`.solution-tweak-modal{backdrop-filter:none!important;-webkit-backdrop-filter:none!important}`;
+  document.head.appendChild(style);
+}
+
 function polishSolvedTweakUi(){
   const root=document.querySelector(".solution-tweak-modal");
   if(!root)return;
@@ -61,6 +72,7 @@ window.addEventListener("picture-tweak-solution",event=>{
   }
 });
 
+installTweakSafetyStyles();
 const observer=new MutationObserver(polishSolvedTweakUi);
 // childList is sufficient for modal creation and textContent changes. Avoid
 // characterData observation so ordinary live status text cannot cause needless
