@@ -14,14 +14,13 @@ function pieceFor(tile){
   return null;
 }
 function pieceKey(tile){const piece=pieceFor(tile);return piece?`${piece.family}:${piece.index}`:null;}
-function samePlacement(a,b){return Number(a?.target)===Number(b?.target)&&Number(a?.rotation)===Number(b?.rotation);}
 
 export class StickerIdentificationModal extends ReviewableStickerIdentificationModal{
   async open(options={}){
     await super.open(options);
-    // v1 of the UI restored hard confirmations before the soft-hint layer was
-    // introduced. Always re-run the current saved state with both inputs so an
-    // imported/reloaded job behaves exactly like the session that produced it.
+    // Older UI layers restored hard confirmations before the soft-hint layer was
+    // introduced. Always re-run both inputs so imported/reloaded work behaves
+    // exactly like the session that produced it.
     const confirmations=clone(this.state?.confirmations||{}),ambiguities=clone(this.state?.ambiguities||options.state?.ambiguities||{});
     const analysis=await this.analyse(confirmations,ambiguities).catch(()=>null);
     if(analysis?.ok){
@@ -41,10 +40,8 @@ export class StickerIdentificationModal extends ReviewableStickerIdentificationM
 
   render(){
     if(!this.analysis)return super.render();
-    // "Ready to solve" must never mean "locked for editing". A probable state
-    // can still contain soft ambiguities, and even an exact state may need a
-    // human correction. Render the editor as editable, then restore the solve
-    // readiness metadata and its banner.
+    // "Ready to solve" never means "locked for editing". Probable states still
+    // contain soft ambiguities, and even a unique state must remain reviewable.
     const resolved=this.analysis.resolved||null;
     this.analysis.resolved=null;
     try{super.render();}
@@ -67,23 +64,24 @@ export class StickerIdentificationModal extends ReviewableStickerIdentificationM
   }
 
   async confirmCurrent(){
-    const hadResolved=this.analysis?.resolved||null;
+    const original=this.analysis,hadResolved=original?.resolved||null;
     if(!hadResolved)return super.confirmCurrent();
-    this.analysis.resolved=null;
+    original.resolved=null;
     try{await super.confirmCurrent();}
     finally{
-      if(this.analysis&&this.analysis!==null&&this.analysis.resolved==null&&this.state?.resolved&&this.analysis===undefined)this.analysis.resolved=hadResolved;
+      if(this.analysis===original&&this.analysis?.resolved==null)this.analysis.resolved=hadResolved;
       if(this.analysis?.resolved&&!this.analysis.resolved.exact&&this.currentTile==null&&this.analysis.nextTile!=null){this.currentTile=this.analysis.nextTile;this.state.currentTile=this.currentTile;this.setInitialPan(false);}
       this.render();
     }
   }
 
   async markAmbiguous(){
-    const hadResolved=this.analysis?.resolved||null;
+    const original=this.analysis,hadResolved=original?.resolved||null;
     if(!hadResolved)return super.markAmbiguous();
-    this.analysis.resolved=null;
+    original.resolved=null;
     try{await super.markAmbiguous();}
     finally{
+      if(this.analysis===original&&this.analysis?.resolved==null)this.analysis.resolved=hadResolved;
       if(this.analysis?.resolved&&!this.analysis.resolved.exact&&this.currentTile==null&&this.analysis.nextTile!=null){this.currentTile=this.analysis.nextTile;this.state.currentTile=this.currentTile;this.setInitialPan(false);}
       this.render();
     }
@@ -149,11 +147,9 @@ export class StickerIdentificationModal extends ReviewableStickerIdentificationM
     const oldHard=clone(this.analysis.confirmations||{}),oldSoft=clone(this.analysis.ambiguities||{}),accepted=clone(authoritative),removed=[];
     const destination=pieceFor(target),source=pieceFor(tile),groups=this.hardGroups(oldHard,tile);
 
-    // The human's 100% assertion wins first. Re-add every older hard cubie only
-    // if it remains compatible with that assertion. Anything that vetoes the
-    // new fact is dropped, including indirect parity/orientation conflicts.
-    // This is intentionally the opposite of asking the new assertion to fit the
-    // previous model.
+    // The new human assertion wins first. Older hard cubies are then re-added
+    // only if they remain compatible. This makes the button genuinely
+    // authoritative instead of asking the new fact to fit the previous model.
     groups.sort((a,b)=>{
       const aSibling=a.piece?.family===source?.family&&a.piece?.index===source?.index;
       const bSibling=b.piece?.family===source?.family&&b.piece?.index===source?.index;
@@ -161,7 +157,8 @@ export class StickerIdentificationModal extends ReviewableStickerIdentificationM
       return b.entries.length-a.entries.length;
     });
     for(const group of groups){
-      const directCollision=group.entries.some(([,value])=>destination?.tiles?.includes(Number(value?.target)));
+      const sameSource=group.piece?.family===source?.family&&group.piece?.index===source?.index;
+      const directCollision=!sameSource&&group.entries.some(([,value])=>destination?.tiles?.includes(Number(value?.target)));
       if(directCollision){
         for(const[otherTile,value]of group.entries)removed.push({tile:otherTile,target:value.target,reason:"reference cubie is now authoritatively occupied"});
         continue;
@@ -172,9 +169,9 @@ export class StickerIdentificationModal extends ReviewableStickerIdentificationM
       else for(const[otherTile,value]of group.entries)removed.push({tile:otherTile,target:value.target,reason:"contradicts the authoritative assignment"});
     }
 
-    // Ambiguous answers are deliberately never used as locks. Keep them only as
-    // soft priors; the v3 constraint layer automatically discards any hint that
-    // the accepted hard state makes impossible or mechanically redundant.
+    // Ambiguous answers never reserve a segment. They remain soft priors only;
+    // the v3 constraint layer drops any hint superseded by the accepted hard
+    // state or by exact mechanical inference.
     delete oldSoft[tile];
     const next=await this.analyseCandidate(accepted,oldSoft);
     if(!next){
@@ -187,8 +184,7 @@ export class StickerIdentificationModal extends ReviewableStickerIdentificationM
     this.analysis=next;this.state.confirmations=clone(next.confirmations||{});this.state.ambiguities=clone(next.ambiguities||{});this.state.resolved=clone(next.resolved||null);
     this.onStatus(`${next.confirmedCount} confirmed · ${next.ambiguousCount||0} ambiguous · ${Math.round(Number(next.stateConfidence||0)*100)}% best-state confidence`);
 
-    if(next.resolved?.exact){this.currentTile=tile;}
-    else this.currentTile=next.nextTile??tile;
+    this.currentTile=next.resolved?.exact?tile:(next.nextTile??tile);
     this.state.currentTile=this.currentTile;this.setInitialPan(false);this.flushState();
     if(next.resolved)await Promise.resolve(this.onResolved(this.serialise()));
     this.render();
