@@ -35,6 +35,7 @@ function captureSolution(result){
   state.variants=[primary,...alternatives.map(item=>cleanVariant(inheritPresentation(primary,item)))].filter(Boolean);
   state.index=0;state.preview=false;
   state.originalTiles=Array.isArray(window.__lastTileCanvases)?window.__lastTileCanvases.slice():window.__lastTileCanvases||null;
+  window.dispatchEvent(new CustomEvent("picture-main-solution",{detail:{result:primary,variants:state.variants.slice()}}));
   queueMicrotask(renderControls);
 }
 
