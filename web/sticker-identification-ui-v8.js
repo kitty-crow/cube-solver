@@ -1,9 +1,8 @@
 import { StickerIdentificationModal as AuthoritativeStickerIdentificationModal } from "./sticker-identification-ui-v7.js";
-import { CENTRE_FACELETS, labelForFacelet, isCentreFacelet } from "./sticker-constraints-v3.js";
+import { CENTRE_FACELETS, labelForFacelet } from "./sticker-constraints-v3.js";
 import { renderCubemapPan } from "./sticker-cubemap-view.js";
 
 const centreSet=new Set(CENTRE_FACELETS);
-const clone=value=>value==null?value:structuredClone(value);
 const uiQuarterFromGeometry=rotation=>((4-(((Number(rotation)||0)%4+4)%4))%4);
 
 function orderedStickerTiles(analysis){
@@ -49,6 +48,8 @@ export class StickerIdentificationModal extends AuthoritativeStickerIdentificati
     super(options);
     installV8Styles();
 
+    const panel=this.root.querySelector(".sticker-id__panel");
+    if(panel){panel.removeAttribute("aria-labelledby");panel.setAttribute("aria-label","Sticker assignment");}
     const close=this.root.querySelector("[data-id-close]");
     if(close){close.textContent="×";close.setAttribute("aria-label","Close sticker identification");close.title="Close";}
 
@@ -188,7 +189,7 @@ export class StickerIdentificationModal extends AuthoritativeStickerIdentificati
     if(this.moreSuggestionsButton)this.moreSuggestionsButton.hidden=true;
 
     const sticker=this.analysis?.stickers?.[this.currentTile]||null;
-    if(this.confirmButton){this.confirmButton.textContent="Assign";}
+    if(this.confirmButton)this.confirmButton.textContent="Assign";
     if(this.ambiguousButton)this.ambiguousButton.textContent="Ambiguous · 50%";
     if(this.nextButton){this.nextButton.textContent="Not sure · next";this.nextButton.disabled=this.nextSequentialTile()==null;}
     if(this.unassignButton){
@@ -218,25 +219,27 @@ export class StickerIdentificationModal extends AuthoritativeStickerIdentificati
   }
 
   async confirmCurrent(){
-    const from=Number(this.currentTile),before=clone(this.analysis?.confirmations?.[from]||null);
+    const from=Number(this.currentTile),target=Number(this.currentTarget()),quarter=Number(this.quarterTurn);
     await super.confirmCurrent();
     const after=this.analysis?.confirmations?.[from];
-    if(after&&JSON.stringify(after)!==JSON.stringify(before))this.goToSequentialNext(from);
+    const accepted=after&&Number(after.target)===target&&uiQuarterFromGeometry(after.rotation)===quarter;
+    if(accepted)this.goToSequentialNext(from);
   }
 
   async markAmbiguous(){
-    const from=Number(this.currentTile),before=clone(this.analysis?.ambiguities?.[from]||null);
+    const from=Number(this.currentTile),target=Number(this.currentTarget()),quarter=Number(this.quarterTurn);
     await super.markAmbiguous();
     const after=this.analysis?.ambiguities?.[from];
-    if(after&&JSON.stringify(after)!==JSON.stringify(before))this.goToSequentialNext(from);
+    const accepted=after&&Number(after.target)===target&&uiQuarterFromGeometry(after.rotation)===quarter;
+    if(accepted)this.goToSequentialNext(from);
   }
 
   async applyAuthoritativeOverride(){
-    const from=Number(this.currentTile),target=Number(this.overrideTarget?.value),rotation=Number(this.overrideRotation?.value),before=clone(this.analysis?.confirmations?.[from]||null);
+    const from=Number(this.currentTile),target=Number(this.overrideTarget?.value),rotation=Number(this.overrideRotation?.value);
     await super.applyAuthoritativeOverride();
     const after=this.analysis?.confirmations?.[from];
     const accepted=after&&Number(after.target)===target&&uiQuarterFromGeometry(after.rotation)===rotation;
-    if(accepted&&JSON.stringify(after)!==JSON.stringify(before))this.goToSequentialNext(from);
+    if(accepted)this.goToSequentialNext(from);
   }
 
   async unassignCurrent(){
