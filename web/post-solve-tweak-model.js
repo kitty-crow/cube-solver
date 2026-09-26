@@ -209,7 +209,53 @@ function compareTuple(a,b){
   return 0;
 }
 
+function canonicalSolvedBundle(){
+  // Opening the tweak editor is an inspection action, not a constraint-solving
+  // action. Running the full sticker CSP before the user has changed anything
+  // can monopolise the browser's main thread on mobile. The untouched state is
+  // known exactly: it is the canonical solved 3x3 with zero centre correction.
+  const confirmations={};
+  for(const piece of PIECES)for(const tile of piece.tiles)confirmations[tile]={target:tile,rotation:0};
+  const state=FACE_NAMES.map(face=>face.repeat(9)).join("");
+  const resolved={
+    resolved:true,
+    exact:true,
+    state,
+    placements:{},
+    center_rotations:[0,0,0,0,0,0],
+    confirmed:structuredClone(confirmations),
+    ambiguous:{},
+    legal_state_count:1,
+  };
+  const analysis={
+    ok:true,
+    confirmations:structuredClone(confirmations),
+    ambiguities:{},
+    legalStateCount:1,
+    resolved,
+    stickers:{},
+  };
+  return{
+    analysis,
+    confirmations,
+    requests:new Map(),
+    unlockedPieces:new Set(),
+    centerRotations:[0,0,0,0,0,0],
+    completion:resolved,
+    autoAssignments:[],
+    autoUnlockedPieces:[],
+    reconciliationMode:"canonical-solved-fast-path",
+  };
+}
+
 export function completeTweakTarget(input={}){
+  const normalisedRequests=requestsMap(input.requests);
+  const unlocked=unlockedSet(input.unlockedPieces);
+  const centres=centresArray(input.centerRotations);
+  if(normalisedRequests.size===0&&unlocked.size===0&&!centres.some(Boolean)){
+    return canonicalSolvedBundle();
+  }
+
   const initialBase=buildTweakConstraints(input);
   const initial=completeFromBase(initialBase);
   if(initial.completion)return{...initial,autoUnlockedPieces:[],reconciliationMode:"existing-assumptions"};
