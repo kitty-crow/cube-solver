@@ -1,9 +1,14 @@
 from __future__ import annotations
 
+import json
+import sys
+
 from . import backend as _backend
+from .centres import centre_correction, centres_after_solution, simplify_moves
 
 
 _BASE_MANUAL_SOLVER = _backend._solve_manual_3x3
+_BASE_SOLVE_SCAN = _backend.solve_scan
 _MAX_ALTERNATIVES = 3
 
 
@@ -54,4 +59,99 @@ def solve_manual_with_variants(raw: bytes, tile_size: int, manual: dict) -> dict
     return primary
 
 
+def _invert_token(token: str) -> str:
+    token = str(token).strip()
+    if token.endswith("2"):
+        return token
+    if token.endswith("'"):
+        return token[:-1]
+    return token + "'"
+
+
+def _invert_moves(moves) -> list[str]:
+    if moves is None:
+        tokens = []
+    elif isinstance(moves, str):
+        tokens = moves.split()
+    else:
+        tokens = [str(token) for token in moves]
+    return [_invert_token(token) for token in reversed([token for token in tokens if token])]
+
+
+def _normalise_centres(values) -> list[int]:
+    raw = list(values or [])
+    return [int(raw[index] if index < len(raw) else 0) % 4 for index in range(6)]
+
+
+def _post_solve_tweak_result(payload: dict) -> dict:
+    """Return legal moves from the canonical solved cube to a user-tweaked target."""
+    from rubik_solver import Cube, solve
+
+    tweak = payload.get("post_solve_tweak")
+    if not isinstance(tweak, dict):
+        raise ValueError("Missing post-solve tweak target")
+    manual = tweak.get("manual") if isinstance(tweak.get("manual"), dict) else tweak
+    state = str(manual.get("state") or "")
+    if len(state) != 54:
+        raise ValueError("The tweaked target does not contain a complete 3×3 sticker state")
+
+    cube = Cube.from_string(state)
+    valid = cube.verify()
+    if valid is not True:
+        raise ValueError(f"The requested sticker/cubie target is not a legal 3×3 state: {valid}")
+
+    to_solved = solve(cube)
+    if to_solved is None:
+        to_solved_tokens = []
+    elif isinstance(to_solved, str):
+        to_solved_tokens = to_solved.split()
+    else:
+        to_solved_tokens = [str(token) for token in to_solved]
+    cubie_target_tokens = _invert_moves(to_solved_tokens)
+
+    desired_centres = _normalise_centres(tweak.get("center_rotations", manual.get("center_rotations")))
+    remaining_centres = centres_after_solution(desired_centres, " ".join(cubie_target_tokens))
+    try:
+        centre_algorithms = centre_correction(remaining_centres)
+    except ValueError as error:
+        raise ValueError(
+            "That combination of cubie placement, sticker orientation and centre rotations cannot be reached "
+            "by legal 3×3 moves. Keep the tweak as a draft and add or change another compatible tweak."
+        ) from error
+
+    centre_tokens = simplify_moves(" ".join(centre_algorithms))
+    moves = simplify_moves(cubie_target_tokens + centre_tokens)
+    return {
+        "kind": "post-solve-tweak",
+        "state": state,
+        "center_rotations": desired_centres,
+        "cubie_moves": cubie_target_tokens,
+        "centre_moves": centre_tokens,
+        "moves": moves,
+        "move_count": len(moves),
+        "cubie_move_count": len(cubie_target_tokens),
+        "centre_move_count": len(centre_tokens),
+        "remaining_centres_before_correction": remaining_centres,
+        "from_state": "canonical solved picture cube",
+        "to_state": "user-tweaked legal picture target",
+        "exact": bool(manual.get("exact", True)),
+        "legal_state_count": int(manual.get("legal_state_count", 1) or 1),
+    }
+
+
+def solve_scan_with_post_solve_tweaks(payload_json: str) -> str:
+    payload = json.loads(payload_json)
+    if not isinstance(payload.get("post_solve_tweak"), dict):
+        return _BASE_SOLVE_SCAN(payload_json)
+    try:
+        result = _post_solve_tweak_result(payload)
+    except Exception as error:
+        result = {"kind": "post-solve-tweak-error", "error": str(error)}
+    return json.dumps(result, separators=(",", ":"))
+
+
 _backend._solve_manual_3x3 = solve_manual_with_variants
+_backend.solve_scan = solve_scan_with_post_solve_tweaks
+_package = sys.modules.get(__package__)
+if _package is not None:
+    _package.solve_scan = solve_scan_with_post_solve_tweaks
