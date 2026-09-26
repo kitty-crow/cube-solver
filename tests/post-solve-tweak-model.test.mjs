@@ -50,10 +50,25 @@ const unconstrained=analyseStickerConstraints({confirmations:{},ambiguities:{},c
 const legalOption=unconstrained.stickers[5].domain.find(option=>Number(option.target)!==5);
 assert.ok(legalOption,"expected at least one non-identity legal edge placement");
 const uiRotation=mod4(4-Number(legalOption.rotation));
-const authoritative=completeTweakTarget({requests:new Map([[5,{target:Number(legalOption.target),rotation:uiRotation}]])});
+const correction=new Map([[5,{target:Number(legalOption.target),rotation:uiRotation}]]);
+const authoritative=completeTweakTarget({requests:correction});
 assert.equal(authoritative.analysis?.ok,true);
 assert.equal(authoritative.completion?.resolved,true,"an authoritative correction should be reconciled automatically");
 assert.ok((authoritative.autoUnlockedPieces?.length||0)>=1,"at least one prior cubie assumption should be released when parity requires it");
 assert.deepEqual(authoritative.completion?.confirmed?.[5],{target:Number(legalOption.target),rotation:Number(legalOption.rotation)});
+
+// The reconstruction engine must also remain capable of completing an exact
+// legal state when every old non-centre assumption is released. This is the
+// safety-net used when more than two assumptions from the previous 'solved'
+// reconstruction were wrong. The authoritative observation must survive it.
+const allPieces=new Set();
+for(let tile=0;tile<54;tile++){
+  const piece=pieceForTile(tile);
+  if(piece&&piece.kind!=="centre")allPieces.add(piece.key);
+}
+const rebuilt=completeTweakTarget({requests:correction,unlockedPieces:allPieces});
+assert.equal(rebuilt.analysis?.ok,true);
+assert.equal(rebuilt.completion?.resolved,true,"a fully released reconstruction should still collapse to one legal state");
+assert.deepEqual(rebuilt.completion?.confirmed?.[5],{target:Number(legalOption.target),rotation:Number(legalOption.rotation)},"the authoritative observation must remain fixed during a full rebuild");
 
 console.log("post-solve tweak model tests passed");
