@@ -1,6 +1,6 @@
 import { ReferenceAssistant as PersistedReferenceAssistant } from "./reference-ui-v4.js";
 import { ReferenceAlignmentModal } from "./reference-aligner-v13.js";
-import { StickerIdentificationModal } from "./sticker-identification-ui-v6.js";
+import { StickerIdentificationModal } from "./sticker-identification-ui-v7.js";
 import { loadReferenceSession, saveReferenceSession } from "./reference-session.js";
 
 export class ReferenceAssistant extends PersistedReferenceAssistant{
@@ -92,14 +92,14 @@ export class ReferenceAssistant extends PersistedReferenceAssistant{
     if(this.identificationResolved()){
       const resolved=this.identificationState.resolved,confidence=Math.round(Number(resolved?.confidence||1)*100),kind=resolved?.exact===false?"High-confidence legal scramble":"Unique legal scramble";
       button.textContent="Review identified scramble";
-      note.textContent=`${kind}${resolved?.exact===false?` · ${confidence}%`:""} · ${summary?.confirmedCount??Object.keys(this.identificationState?.confirmations||{}).length} confirmed · ${summary?.ambiguousCount||0} ambiguous hints.`;
+      note.textContent=`${kind}${resolved?.exact===false?` · ${confidence}%`:""} · ${summary?.confirmedCount??Object.keys(this.identificationState?.confirmations||{}).length} confirmed · ${summary?.ambiguousCount||0} ambiguous hints. Ambiguous hints remain editable and non-locking.`;
     }else if(summary){
       button.textContent="Continue identifying stickers";
       const states=Number(summary.legalStateCount||0).toLocaleString(),confidence=Math.round(Number(summary.stateConfidence||0)*100);
       note.textContent=`${summary.confirmedCount||0} confirmed · ${summary.ambiguousCount||0} ambiguous · ${summary.inferredCount||0} inferred · ${summary.unresolvedCount||0} unresolved · ${states} legal state${Number(summary.legalStateCount)===1?"":"s"} · best state ${confidence}%.`;
     }else{
       button.textContent="Identify scrambled stickers";
-      note.textContent="Hard confirmations are exact. If a segment looks right but is not certain, mark it ambiguous: it becomes a 50% human hint while cubie type, adjacency, parity and image evidence resolve the rest.";
+      note.textContent="Hard confirmations are exact. Ambiguous answers are 50% hints only and never reserve or lock a reference segment.";
     }
   }
 }
