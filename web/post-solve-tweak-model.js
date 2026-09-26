@@ -132,29 +132,51 @@ function nextSticker(analysis,unlocked,explicit){
   return choices[0]||null;
 }
 
+function chooseSupportedOption(candidate,confirmations,base){
+  const ranked=[...candidate.domain].sort((a,b)=>
+    preference(candidate.tile,a)-preference(candidate.tile,b)||
+    Number(a.target)-Number(b.target)||
+    Number(a.rotation)-Number(b.rotation)
+  );
+  for(const option of ranked){
+    const nextConfirmations={
+      ...confirmations,
+      [candidate.tile]:{target:Number(option.target),rotation:mod4(option.rotation)},
+    };
+    const nextAnalysis=analyseStickerConstraints({
+      confirmations:nextConfirmations,
+      ambiguities:{},
+      centerRotations:base.centerRotations,
+    });
+    if(nextAnalysis?.ok&&Number(nextAnalysis.legalStateCount||0)>0){
+      return{option,confirmations:nextConfirmations,analysis:nextAnalysis};
+    }
+  }
+  return null;
+}
+
 function completeFromBase(base){
   if(!base.analysis?.ok||Number(base.analysis.legalStateCount||0)<=0){
     return{...base,completion:null,autoAssignments:[]};
   }
 
   let analysis=base.analysis;
-  const confirmations={...base.confirmations};
+  let confirmations={...base.confirmations};
   const explicit=new Set([...base.requests.keys()]);
   const autoAssignments=[];
 
   for(let guard=0;Number(analysis.legalStateCount||0)>1&&guard<64;guard++){
     const candidate=nextSticker(analysis,base.unlockedPieces,explicit);
     if(!candidate)break;
-    const option=[...candidate.domain].sort((a,b)=>
-      preference(candidate.tile,a)-preference(candidate.tile,b)||
-      Number(a.target)-Number(b.target)||
-      Number(a.rotation)-Number(b.rotation)
-    )[0];
-    if(!option)break;
-    confirmations[candidate.tile]={target:Number(option.target),rotation:mod4(option.rotation)};
-    autoAssignments.push({tile:candidate.tile,target:Number(option.target),rotation:mod4(option.rotation)});
-    analysis=analyseStickerConstraints({confirmations,ambiguities:{},centerRotations:base.centerRotations});
-    if(!analysis?.ok)break;
+    const supported=chooseSupportedOption(candidate,confirmations,base);
+    if(!supported)break;
+    confirmations=supported.confirmations;
+    analysis=supported.analysis;
+    autoAssignments.push({
+      tile:candidate.tile,
+      target:Number(supported.option.target),
+      rotation:mod4(supported.option.rotation),
+    });
   }
 
   const exact=Boolean(analysis?.ok&&Number(analysis.legalStateCount)===1&&analysis.resolved?.resolved);
@@ -190,15 +212,15 @@ function compareTuple(a,b){
 export function completeTweakTarget(input={}){
   const initialBase=buildTweakConstraints(input);
   const initial=completeFromBase(initialBase);
-  if(initial.completion)return{...initial,autoUnlockedPieces:[]};
+  if(initial.completion)return{...initial,autoUnlockedPieces:[],reconciliationMode:"existing-assumptions"};
 
   const alreadyUnlocked=new Set(initialBase.unlockedPieces);
   const candidates=PIECES.filter(piece=>!alreadyUnlocked.has(piece.key)).map(piece=>piece.key);
   let best=null;
 
-  // A correction supplied here is new ground truth about the real cube. If it
-  // contradicts the old "solved" reconstruction, release the smallest possible
-  // number of old assumptions automatically instead of rejecting the correction.
+  // A correction supplied here is new ground truth about the real cube. First
+  // preserve as much of the previous reconstruction as possible by releasing
+  // the smallest old-assumption set likely to restore consistency.
   for(const releaseCount of[1,2]){
     for(const extraKeys of combinations(candidates,releaseCount)){
       const unlocked=new Set([...(input.unlockedPieces||[]),...extraKeys]);
@@ -213,9 +235,30 @@ export function completeTweakTarget(input={}){
   }
 
   if(best){
-    return{...best.bundle,autoUnlockedPieces:best.extraKeys};
+    return{...best.bundle,autoUnlockedPieces:best.extraKeys,reconciliationMode:"minimal-release"};
   }
-  return{...initial,autoUnlockedPieces:[]};
+
+  // If more than two old assumptions were wrong, do not reject the user's
+  // observation and do not ask them which unrelated cubie to sacrifice. Release
+  // every remaining non-authoritative cubie assumption, keep the correction
+  // fixed, and let exact cube mechanics reconstruct the least-disturbing legal
+  // state from scratch. The reference itself is never changed by this process.
+  if(candidates.length){
+    const unlocked=new Set([...(input.unlockedPieces||[]),...candidates]);
+    const reconciled=completeFromBase(buildTweakConstraints({...input,unlockedPieces:unlocked}));
+    if(reconciled.completion){
+      return{
+        ...reconciled,
+        autoUnlockedPieces:candidates.slice(),
+        reconciliationMode:"full-authoritative-rebuild",
+      };
+    }
+  }
+
+  // Reaching this point means the authoritative observations themselves are
+  // mutually inconsistent, not merely that the earlier solved reconstruction
+  // was wrong.
+  return{...initial,autoUnlockedPieces:[],reconciliationMode:"authoritative-conflict"};
 }
 
 export function hasUserTweaks({requests=new Map(),unlockedPieces=new Set(),centerRotations=[]}={}){
