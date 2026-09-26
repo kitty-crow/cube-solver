@@ -232,7 +232,7 @@ async function runVisualEnsemble(payload) {
 async function loadBackendFiles() {
   const files = [
     "__init__.py", "geometry.py", "vision.py", "reconstruct.py", "centres.py", "centre_fit.py",
-    "generic.py", "surface.py", "pocket.py", "bigcube.py", "solid_colour.py", "backend.py",
+    "generic.py", "surface.py", "pocket.py", "bigcube.py", "solid_colour.py", "backend.py", "manual_variants.py",
   ];
   pyodide.FS.mkdirTree("/app/cube_backend");
   for (const file of files) {
@@ -272,7 +272,7 @@ os.environ["RUBIK_SOLVER_CACHE_DIR"] = "/solver-cache/rubik_solver"
 
       status("backend", "Loading cube reconstruction backend…", 0.75);
       await loadBackendFiles();
-      pyodide.runPython("import cube_backend");
+      pyodide.runPython("import cube_backend; import cube_backend.manual_variants");
       postMessage({ type: "python-ready", version: PYODIDE_VERSION });
     })();
   }
