@@ -10,6 +10,26 @@ const reviewGrid=document.querySelector("#review-grid");
 const solveStage=document.querySelector("#solve-stage");
 const solveButton=document.querySelector("#solve-cube");
 
+function installPageChromeStyles(){
+  if(document.querySelector("#main-ui-v2-styles"))return;
+  const style=document.createElement("style");
+  style.id="main-ui-v2-styles";
+  style.textContent=`
+    .pages-footer {
+      display:flex !important;
+      flex-direction:row !important;
+      flex-wrap:nowrap !important;
+      align-items:center !important;
+      justify-content:space-between !important;
+      gap:1rem !important;
+    }
+    .pages-footer > * { margin:0 !important; min-width:0; }
+    .pages-footer [data-version] { white-space:nowrap; }
+    .pages-footer a { white-space:nowrap; }
+  `;
+  document.head.appendChild(style);
+}
+
 let cameraVisible=true;
 let autoStopped=false;
 let internalStop=false;
@@ -109,6 +129,7 @@ if(scanCounter)new MutationObserver(syncCompletionCopy).observe(scanCounter,{chi
 if(scanTitle)new MutationObserver(syncCompletionCopy).observe(scanTitle,{childList:true,characterData:true,subtree:true});
 if(solveButton)new MutationObserver(canonicaliseSolveLabel).observe(solveButton,{childList:true,characterData:true,subtree:true});
 
+installPageChromeStyles();
 syncSolveStage();
 syncCompletionCopy();
 canonicaliseSolveLabel();
