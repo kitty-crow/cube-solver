@@ -1,11 +1,42 @@
 import { ReferenceAssistant as PersistedReferenceAssistant } from "./reference-ui-v4.js";
-import { ReferenceAlignmentModal } from "./reference-aligner-v13.js";
+import { ReferenceAlignmentModal } from "./reference-aligner-v14.js";
 import { StickerIdentificationModal } from "./sticker-identification-ui-v8.js";
 import { loadReferenceSession, saveReferenceSession } from "./reference-session.js";
+
+function installReferenceWorkflowStyles(){
+  if(document.querySelector("#reference-workflow-v6-styles"))return;
+  const style=document.createElement("style");
+  style.id="reference-workflow-v6-styles";
+  style.textContent=`
+    .reference-aligner-launch[data-ref-align-tools],
+    .reference-aligner-launch[data-sticker-identify-tools] {
+      display:grid !important;
+      grid-template-columns:1fr;
+      gap:.42rem;
+      width:100%;
+      align-items:stretch;
+    }
+    .reference-aligner-launch[data-ref-align-tools] > .pages-button,
+    .reference-aligner-launch[data-sticker-identify-tools] > .pages-button {
+      width:100%;
+      min-width:0;
+      max-width:none;
+      justify-content:center;
+      text-align:center;
+    }
+    .reference-aligner-launch[data-ref-align-tools] .reference-aligner-launch__note,
+    .reference-aligner-launch[data-sticker-identify-tools] .reference-aligner-launch__note {
+      width:100%;
+    }
+    .reference-candidates.reference-candidates--before-faces { margin-bottom:.4rem; }
+  `;
+  document.head.appendChild(style);
+}
 
 export class ReferenceAssistant extends PersistedReferenceAssistant{
   constructor(options={}){
     super(options);
+    installReferenceWorkflowStyles();
     this.identificationState=null;
     this.aligner?.close?.();
     this.aligner?.root?.remove?.();
@@ -76,7 +107,13 @@ export class ReferenceAssistant extends PersistedReferenceAssistant{
 
   identificationResolved(){return Boolean(this.identificationState?.resolved?.resolved);}
   async openStickerIdentification(){const candidate=this.result?.candidates?.[this.selectedIndex];if(!candidate||!this.lastPayload)throw new Error("Choose and align a reference before identifying the scramble.");await this.identifier.open({candidate,payload:this.lastPayload,state:this.identificationState});}
-  render(){super.render();this.renderIdentificationControl();}
+  render(){super.render();this.reorderReferenceLayout();this.renderIdentificationControl();}
+
+  reorderReferenceLayout(){
+    if(!this.candidatesEl||!this.sixWrap||!this.sixWrap.parentElement)return;
+    this.candidatesEl.classList.add("reference-candidates--before-faces");
+    if(this.candidatesEl.nextElementSibling!==this.sixWrap)this.sixWrap.insertAdjacentElement("beforebegin",this.candidatesEl);
+  }
 
   renderIdentificationControl(){
     if(!this.sixWrap)return;
