@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { analyseStickerConstraints, EDGE_FACELETS, CORNER_FACELETS, CENTRE_FACELETS } from "../web/sticker-constraints-v2.js";
+import { analyseStickerConstraints, EDGE_FACELETS, CORNER_FACELETS, CENTRE_FACELETS } from "../web/sticker-constraints-v3.js";
 import { compatibleReferenceTargets, prepareAuthoritativeOverride } from "../web/sticker-authoritative-override.js";
 
 const solvedState="UUUUUUUUURRRRRRRRRFFFFFFFFFDDDDDDDDDLLLLLLLLLBBBBBBBBB";
@@ -70,6 +70,26 @@ function identityScoreMatrix(){
   assert.equal(result.resolved.exact,false);
   assert.equal(result.resolved.resolution_kind,"probable");
   assert.equal(result.resolved.state,solvedState);
+  assert.ok(Array.isArray(result.resolved.alternatives));
+  assert.ok(result.resolved.alternatives.length>=1);
+  assert.notEqual(result.resolved.alternatives[0].state,result.resolved.state);
+  assert.notEqual(result.nextTile,null,"probable readiness must not lock further identification");
+}
+
+{
+  // A soft hint disappears automatically when hard cube mechanics supersede it.
+  const confirmations={};
+  for(const piece of EDGE_FACELETS)confirmations[piece[0]]={target:piece[0],rotation:0};
+  for(const piece of CORNER_FACELETS)confirmations[piece[0]]={target:piece[0],rotation:0};
+  const result=analyseStickerConstraints({
+    confirmations,
+    ambiguities:{10:{target:12,rotation:0,weight:.5}},
+    centerRotations:[0,0,0,0,0,0],
+  });
+  assert.equal(result.ok,true);
+  assert.equal(result.legalStateCount,1);
+  assert.equal(result.ambiguities[10],undefined);
+  assert.equal(result.stickers[10].status,"inferred");
 }
 
 {
