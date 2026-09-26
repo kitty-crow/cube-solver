@@ -16,6 +16,19 @@ function polishSolvedTweakUi(){
   const source=root.querySelector("[data-tweak-source]");
   if(source)source.style.gridColumn="1 / -1";
 
+  // Move playback belongs to the main 3D solution player. Keep the placeholder
+  // element so the v2 editor can safely toggle it internally, but remove every
+  // modal playback control and sequence display from the user interface.
+  const playback=root.querySelector("[data-tweak-playback]");
+  if(playback&&!playback.dataset.mainPlayerOnly){
+    playback.replaceChildren();
+    playback.hidden=true;
+    playback.dataset.mainPlayerOnly="true";
+  }
+
+  const calculate=root.querySelector("[data-tweak-calculate]");
+  if(calculate)calculate.textContent="Calculate legal moves";
+
   // The model performs a full authoritative rebuild before reaching this state.
   // Do not tell the user to sacrifice another cubie manually or imply that the
   // fixed reference should move.
@@ -24,6 +37,25 @@ function polishSolvedTweakUi(){
     status.textContent=CONFLICT_COPY;
   }
 }
+
+// v2 receives the solver result first so it can clear its busy state. We then
+// close the editor and append the calculated correction path to the existing
+// main-page move timeline. The previous "Solved" state becomes the checkpoint
+// between the original solve and the newly appended tweak moves.
+window.addEventListener("picture-tweak-solution",event=>{
+  const installed=window.pictureSolutionControls?.appendTweakRoute?.(event.detail);
+  if(!installed)return;
+  const root=document.querySelector(".solution-tweak-modal");
+  if(root)root.hidden=true;
+  const hint=document.querySelector("[data-solved-tweak-hint]");
+  if(hint){
+    const count=Array.isArray(event.detail?.moves)?event.detail.moves.length:0;
+    hint.textContent=count
+      ?`${count} tweak move${count===1?"":"s"} added after the previous solved checkpoint. Continue with the main 3D controls.`
+      :"The corrected state already matches the fixed reference.";
+    hint.dataset.active="false";
+  }
+});
 
 const observer=new MutationObserver(polishSolvedTweakUi);
 observer.observe(document.documentElement,{childList:true,subtree:true,characterData:true});
