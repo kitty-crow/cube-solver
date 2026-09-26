@@ -40,21 +40,28 @@
   <main id="content" class="pages-main app-main">
     <section class="tool-head">
       <h1>Picture Cube Solver</h1>
-      <label class="cube-size-picker" for="cube-mode">
-        <span>Type</span>
-        <select id="cube-mode">
-          <option value="picture" selected>Picture</option>
-          <option value="solid-colour">Solid colour</option>
-        </select>
-      </label>
-      <label class="cube-size-picker" for="cube-size">
-        <span>Cube</span>
-        <select id="cube-size">
-          <option value="2">2×2×2</option>
-          <option value="3" selected>3×3×3</option>
-          <option value="4">4×4×4</option>
-        </select>
-      </label>
+      <div class="tool-controls">
+        <div class="work-actions work-actions--top" aria-label="Saved work">
+          <button id="download-work" class="pages-button pages-button--quiet" type="button">Download work</button>
+          <button id="load-work" class="pages-button pages-button--quiet" type="button">Load work</button>
+          <input id="load-work-file" type="file" accept=".cube,application/gzip" hidden>
+        </div>
+        <label class="cube-size-picker" for="cube-mode">
+          <span>Type</span>
+          <select id="cube-mode">
+            <option value="picture" selected>Picture</option>
+            <option value="solid-colour">Solid colour</option>
+          </select>
+        </label>
+        <label class="cube-size-picker" for="cube-size">
+          <span>Cube</span>
+          <select id="cube-size">
+            <option value="2">2×2</option>
+            <option value="3" selected>3×3</option>
+            <option value="4">4×4</option>
+          </select>
+        </label>
+      </div>
     </section>
 
     <section id="scanner" class="scanner-layout" aria-labelledby="scan-title">
@@ -63,14 +70,14 @@
           <video id="camera" playsinline muted></video>
           <div id="face-guide" class="face-guide" aria-hidden="true"></div>
           <div class="camera-empty"><strong>Camera off</strong></div>
-          <div id="stability-label" class="stability-badge">Start camera</div>
+          <div id="stability-label" class="stability-badge">Tap/click preview to capture</div>
         </div>
         <canvas id="capture-canvas" hidden></canvas>
         <canvas id="probe-canvas" hidden></canvas>
         <div class="camera-actions">
           <button id="start-camera" class="pages-button pages-button--primary" type="button">Start camera</button>
           <button id="stop-camera" class="pages-button" type="button" hidden>Stop camera</button>
-          <button id="capture-face" class="pages-button pages-button--primary" type="button" disabled>Capture face</button>
+          <button id="capture-face" type="button" hidden tabindex="-1" aria-hidden="true" disabled>Capture face</button>
           <label class="scan-option">
             <input id="rounded-cubies" type="checkbox">
             <span>Rounded cubies</span>
@@ -82,7 +89,6 @@
         <div class="scan-step__top">
           <span id="scan-counter" class="scan-counter">1 / 6</span>
           <span id="turn-cube-size" hidden>3×3</span>
-          <span id="worker-status" class="runtime-status">Starting…</span>
         </div>
         <h2 id="scan-title">Scan front</h2>
         <p id="scan-instruction">Choose a front face and keep the cube upright.</p>
@@ -91,30 +97,35 @@
           <div id="scan-orientation-guide" class="scan-orientation-guide" aria-label="Animated 3D guide showing how to orient the cube for the next scan"></div>
         </div>
         <div class="scan-progress" aria-hidden="true"><span id="scan-progress"></span></div>
-        <div id="solve-progress-wrap" class="solve-progress-wrap" hidden>
-          <div class="solve-progress__meta">
-            <span id="solve-progress-label">Preparing…</span>
-            <span id="solve-progress-value">0%</span>
-          </div>
-          <div id="solve-progress-track" class="solve-progress" role="progressbar" aria-label="Solve progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
-            <span id="solve-progress-bar"></span>
-          </div>
-        </div>
-        <button id="solve-cube" class="pages-button pages-button--primary solve-button" type="button" disabled>Starting…</button>
       </aside>
     </section>
 
     <section class="review-section" aria-labelledby="review-title">
       <div class="section-heading">
         <h2 id="review-title">Captured faces</h2>
-        <div class="work-actions">
-          <button id="download-work" class="pages-button pages-button--quiet" type="button">Download work</button>
-          <button id="load-work" class="pages-button pages-button--quiet" type="button">Load work</button>
-          <input id="load-work-file" type="file" accept=".cube,application/gzip" hidden>
-          <button id="clear-image-memory" class="pages-button pages-button--quiet" type="button">Clear image memory</button>
-        </div>
+        <button id="clear-image-memory" class="pages-button pages-button--quiet" type="button">Clear image memory</button>
       </div>
       <div id="review-grid" class="review-grid"><p class="review-empty">No captures yet.</p></div>
+    </section>
+
+    <section id="solve-stage" class="solve-stage pages-panel" hidden aria-labelledby="solve-stage-title">
+      <div class="solve-stage__head">
+        <div>
+          <h2 id="solve-stage-title">Ready to solve</h2>
+          <p id="solve-stage-instruction">Retake or rotate a capture if needed. Continue through identification and mapping here, then solve the cube.</p>
+        </div>
+        <span id="worker-status" class="runtime-status">Starting…</span>
+      </div>
+      <div id="solve-progress-wrap" class="solve-progress-wrap" hidden>
+        <div class="solve-progress__meta">
+          <span id="solve-progress-label">Preparing…</span>
+          <span id="solve-progress-value">0%</span>
+        </div>
+        <div id="solve-progress-track" class="solve-progress" role="progressbar" aria-label="Solve progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+          <span id="solve-progress-bar"></span>
+        </div>
+      </div>
+      <button id="solve-cube" class="pages-button pages-button--primary solve-button" type="button" disabled>Starting…</button>
     </section>
 
     <section id="result-panel" class="result-section pages-panel" hidden aria-labelledby="result-title">
@@ -148,6 +159,7 @@
   <script type="module" src="./solve-gate.js"></script>
   <script type="module" src="./cube-view-instant.js"></script>
   <script type="module" src="./app.js"></script>
+  <script type="module" src="./main-ui-v2.js"></script>
   <script type="module" src="./solve-status-ui.js"></script>
   <script type="module" src="./scan-guide.js"></script>
   <script type="module" src="./reference-hook.js"></script>
