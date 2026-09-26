@@ -1,5 +1,4 @@
 const NativeWorker=window.Worker;
-const FACE_ORDER=["U","R","F","D","L","B"];
 const state={worker:null,variants:[],index:0,originalTiles:null,preview:false,busy:false};
 
 function installStyles(){
@@ -21,35 +20,26 @@ function cleanVariant(result){
   const clean={...result};
   delete clean.alternative_solutions;
   delete clean.__solutionUiSynthetic;
-  delete clean.__solvedPreview;
   return clean;
 }
 
 function inheritPresentation(primary,alternative){
-  const inherited={
-    semantic_reference:primary?.semantic_reference,
-    solved_picture_target:primary?.solved_picture_target,
-    solved_picture_face_order:primary?.solved_picture_face_order,
-    visual_ensemble:primary?.visual_ensemble,
-  };
+  const inherited={semantic_reference:primary?.semantic_reference,solved_picture_target:primary?.solved_picture_target,solved_picture_face_order:primary?.solved_picture_face_order,visual_ensemble:primary?.visual_ensemble};
   const out={...inherited,...alternative};
   if(!out.semantic_reference)out.semantic_reference=primary?.semantic_reference;
   return out;
 }
 
 function captureSolution(result){
-  const alternatives=Array.isArray(result?.alternative_solutions)?result.alternative_solutions:[];
-  const primary=cleanVariant(result);
+  const alternatives=Array.isArray(result?.alternative_solutions)?result.alternative_solutions:[],primary=cleanVariant(result);
   state.variants=[primary,...alternatives.map(item=>cleanVariant(inheritPresentation(primary,item)))].filter(Boolean);
-  state.index=0;
-  state.preview=false;
+  state.index=0;state.preview=false;
   state.originalTiles=Array.isArray(window.__lastTileCanvases)?window.__lastTileCanvases.slice():window.__lastTileCanvases||null;
   queueMicrotask(renderControls);
 }
 
 function captureWorker(worker,url){
-  const href=String(url||"");
-  if(!href.includes("solver-worker.js"))return;
+  if(!String(url||"").includes("solver-worker.js"))return;
   state.worker=worker;
   worker.addEventListener("message",event=>{
     const msg=event.data||{};
@@ -69,6 +59,7 @@ window.Worker=new Proxy(NativeWorker,{
 function dispatchVariant(result){
   if(!state.worker||!result)return;
   const synthetic={...cleanVariant(result),__solutionUiSynthetic:true};
+  window.__lastTileCanvases=state.originalTiles;
   state.worker.dispatchEvent(new MessageEvent("message",{data:{type:"solution",result:synthetic}}));
   queueMicrotask(renderControls);
 }
@@ -82,15 +73,14 @@ function ensureControls(){
     const previous=document.createElement("button");previous.type="button";previous.className="pages-button pages-button--quiet";previous.dataset.solutionVariantPrev="";previous.textContent="←";previous.setAttribute("aria-label","Previous possible solution");
     const label=document.createElement("span");label.className="solution-variant-label";label.dataset.solutionVariantLabel="";
     const next=document.createElement("button");next.type="button";next.className="pages-button pages-button--quiet";next.dataset.solutionVariantNext="";next.textContent="→";next.setAttribute("aria-label","Next possible solution");
-    previous.addEventListener("click",()=>selectVariant(-1));next.addEventListener("click",()=>selectVariant(1));
-    variants.append(previous,label,next);
+    previous.addEventListener("click",()=>selectVariant(-1));next.addEventListener("click",()=>selectVariant(1));variants.append(previous,label,next);
     panel.querySelector(".result-head > div")?.appendChild(variants);
   }
   let actions=panel.querySelector("[data-solution-preview-actions]");
   if(!actions){
     actions=document.createElement("div");actions.className="solution-preview-actions";actions.dataset.solutionPreviewActions="";
-    const button=document.createElement("button");button.type="button";button.className="pages-button pages-button--quiet";button.dataset.showSolvedCube="";button.textContent="Show solved cube";button.addEventListener("click",()=>toggleSolvedPreview());
-    actions.appendChild(button);panel.querySelector(".move-panel")?.appendChild(actions);
+    const button=document.createElement("button");button.type="button";button.className="pages-button pages-button--quiet";button.dataset.showSolvedCube="";button.textContent="Show solved cube";button.addEventListener("click",()=>toggleSolvedPreview());actions.appendChild(button);
+    panel.querySelector(".move-panel")?.appendChild(actions);
   }
   return{panel,variants,actions};
 }
@@ -109,42 +99,13 @@ function renderControls(){
 
 function selectVariant(delta){
   if(state.busy||state.variants.length<=1)return;
-  if(state.preview){state.preview=false;window.__lastTileCanvases=state.originalTiles;}
+  state.preview=false;
   const count=state.variants.length;state.index=(state.index+delta+count)%count;
-  window.__lastTileCanvases=state.originalTiles;
   dispatchVariant(state.variants[state.index]);
 }
 
-function loadImage(src){return new Promise((resolve,reject)=>{const image=new Image();image.onload=()=>resolve(image);image.onerror=()=>reject(new Error("Could not load solved face preview"));image.src=src;});}
-function cloneCanvas(source){const canvas=document.createElement("canvas");canvas.width=source.width;canvas.height=source.height;canvas.getContext("2d",{alpha:false}).drawImage(source,0,0);return canvas;}
-
-async function referenceSolvedTiles(result,size){
-  const semantic=result?.semantic_reference||{},previews=Array.isArray(semantic.solved_face_previews)?semantic.solved_face_previews:[],order=Array.isArray(semantic.face_order)&&semantic.face_order.length===6?semantic.face_order:FACE_ORDER;
-  if(previews.length!==6)return null;
-  const images=await Promise.all(previews.map(loadImage)),byFace=new Map(order.map((face,index)=>[String(face),images[index]])),tiles=[];
-  for(const face of FACE_ORDER){
-    const image=byFace.get(face);if(!image)return null;
-    const sw=image.naturalWidth||image.width,sh=image.naturalHeight||image.height;
-    for(let row=0;row<size;row++)for(let col=0;col<size;col++){
-      const canvas=document.createElement("canvas");canvas.width=Math.max(48,Math.floor(sw/size));canvas.height=Math.max(48,Math.floor(sh/size));
-      canvas.getContext("2d",{alpha:false}).drawImage(image,col*sw/size,row*sh/size,sw/size,sh/size,0,0,canvas.width,canvas.height);tiles.push(canvas);
-    }
-  }
-  return tiles;
-}
-
-function colourSolvedTiles(size){
-  if(size!==3||!Array.isArray(state.originalTiles)||state.originalTiles.length<54)return null;
-  const tiles=[];
-  for(let face=0;face<6;face++){
-    const centre=state.originalTiles[face*9+4];if(!centre)return null;
-    for(let local=0;local<9;local++)tiles.push(cloneCanvas(centre));
-  }
-  return tiles;
-}
-
-async function solvedTilesFor(result,size){
-  try{return await referenceSolvedTiles(result,size)||colourSolvedTiles(size);}catch(error){console.warn("Could not build solved preview",error);return colourSolvedTiles(size);}
+function setPreviewMoveControls(disabled){
+  for(const selector of["#prev-move","#play-moves","#next-move","#reset-playback"]){const element=document.querySelector(selector);if(element)element.disabled=disabled;}
 }
 
 async function toggleSolvedPreview(){
@@ -152,17 +113,21 @@ async function toggleSolvedPreview(){
   state.busy=true;renderControls();
   try{
     if(state.preview){
-      state.preview=false;window.__lastTileCanvases=state.originalTiles;dispatchVariant(state.variants[state.index]);return;
+      state.preview=false;dispatchVariant(state.variants[state.index]);return;
     }
-    const result=state.variants[state.index],size=Number(document.querySelector("#cube-size")?.value||3),tiles=await solvedTilesFor(result,size);
-    if(!tiles){
-      const detail=document.querySelector("#move-detail");if(detail)detail.textContent="A direct solved preview is unavailable for this cube, but the move sequence is still valid.";return;
+    const view=window.__activePictureCubeView,result=state.variants[state.index],size=Number(document.querySelector("#cube-size")?.value||3);
+    if(!view||typeof view.showMovesInstant!=="function"||!state.originalTiles){
+      const detail=document.querySelector("#move-detail");if(detail)detail.textContent="The instant solved preview is not ready yet.";return;
     }
-    state.preview=true;window.__lastTileCanvases=tiles;
-    dispatchVariant({...result,moves:[],move_count:0,cubie_move_count:0,centre_move_count:0,__solvedPreview:true});
-    queueMicrotask(()=>{
-      const summary=document.querySelector("#result-summary");if(summary)summary.textContent=`Solved cube preview${state.variants.length>1?` · solution ${state.index+1}/${state.variants.length}`:""}`;
-      const detail=document.querySelector("#move-detail");if(detail)detail.textContent="This is the final cube immediately, without playing the move animation.";
-    });
-  }finally{state.busy=false;queueMicrotask(renderControls);}
+    view.build(state.originalTiles,size);
+    if(!view.showMovesInstant(result.moves||[]))return;
+    state.preview=true;setPreviewMoveControls(true);
+    const count=result.move_count??(result.moves||[]).length,summary=document.querySelector("#result-summary"),moveText=document.querySelector("#move-text"),detail=document.querySelector("#move-detail");
+    if(summary)summary.textContent=`${count} moves · solved preview${state.variants.length>1?` · solution ${state.index+1}/${state.variants.length}`:""}`;
+    if(moveText)moveText.textContent="Solved preview ✓";
+    if(detail)detail.textContent="Final 3D state shown immediately. Back to moves returns to the start of this solution.";
+  }catch(error){
+    console.warn("Could not show solved cube instantly",error);
+    const detail=document.querySelector("#move-detail");if(detail)detail.textContent=error instanceof Error?error.message:String(error);
+  }finally{state.busy=false;renderControls();}
 }
