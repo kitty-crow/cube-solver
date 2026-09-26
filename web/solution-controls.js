@@ -126,7 +126,7 @@ async function referenceSolvedTiles(result,size){
     const image=byFace.get(face);if(!image)return null;
     const sw=image.naturalWidth||image.width,sh=image.naturalHeight||image.height;
     for(let row=0;row<size;row++)for(let col=0;col<size;col++){
-      const canvas=document.createElement("canvas\");canvas.width=Math.max(48,Math.floor(sw/size));canvas.height=Math.max(48,Math.floor(sh/size));
+      const canvas=document.createElement("canvas");canvas.width=Math.max(48,Math.floor(sw/size));canvas.height=Math.max(48,Math.floor(sh/size));
       canvas.getContext("2d",{alpha:false}).drawImage(image,col*sw/size,row*sh/size,sw/size,sh/size,0,0,canvas.width,canvas.height);tiles.push(canvas);
     }
   }
