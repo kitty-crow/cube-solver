@@ -9,7 +9,7 @@ function installStyles(){
   style.textContent=`
     .solution-variant-controls{display:flex;align-items:center;gap:.45rem;flex-wrap:wrap;margin-top:.45rem}
     .solution-variant-controls[hidden]{display:none}
-    .solution-variant-label{min-width:7rem;text-align:center;font-size:.76rem;font-weight:800}
+    .solution-variant-label{min-width:8.5rem;text-align:center;font-size:.76rem;font-weight:800}
     .solution-preview-actions{display:grid;gap:.45rem;margin-top:.45rem}
     .solution-preview-actions .pages-button{width:100%;justify-content:center}
   `;
@@ -25,9 +25,22 @@ function cleanVariant(result){
   return clean;
 }
 
+function inheritPresentation(primary,alternative){
+  const inherited={
+    semantic_reference:primary?.semantic_reference,
+    solved_picture_target:primary?.solved_picture_target,
+    solved_picture_face_order:primary?.solved_picture_face_order,
+    visual_ensemble:primary?.visual_ensemble,
+  };
+  const out={...inherited,...alternative};
+  if(!out.semantic_reference)out.semantic_reference=primary?.semantic_reference;
+  return out;
+}
+
 function captureSolution(result){
   const alternatives=Array.isArray(result?.alternative_solutions)?result.alternative_solutions:[];
-  state.variants=[cleanVariant(result),...alternatives.map(cleanVariant)].filter(Boolean);
+  const primary=cleanVariant(result);
+  state.variants=[primary,...alternatives.map(item=>cleanVariant(inheritPresentation(primary,item)))].filter(Boolean);
   state.index=0;
   state.preview=false;
   state.originalTiles=Array.isArray(window.__lastTileCanvases)?window.__lastTileCanvases.slice():window.__lastTileCanvases||null;
@@ -86,15 +99,12 @@ function renderControls(){
   const ui=ensureControls();if(!ui)return;
   const count=state.variants.length,index=Math.min(state.index,Math.max(0,count-1));state.index=index;
   ui.variants.hidden=count<=1;
-  const label=ui.variants.querySelector("[data-solution-variant-label]");if(label)label.textContent=count>1?`Solution ${index+1} of ${count}`:"";
+  const result=state.variants[index],confidence=Number(result?.confidence),confidenceText=Number.isFinite(confidence)?` · ${Math.round(confidence*100)}%`:"";
+  const label=ui.variants.querySelector("[data-solution-variant-label]");if(label)label.textContent=count>1?`Solution ${index+1} of ${count}${confidenceText}`:"";
   const prev=ui.variants.querySelector("[data-solution-variant-prev]"),next=ui.variants.querySelector("[data-solution-variant-next]");
   if(prev)prev.disabled=state.busy||count<=1;if(next)next.disabled=state.busy||count<=1;
   const preview=ui.actions.querySelector("[data-show-solved-cube]");if(preview){preview.disabled=state.busy||!count;preview.textContent=state.preview?"Back to moves":"Show solved cube";}
-  if(count>1&&!state.preview){
-    const result=state.variants[index],confidence=Number(result?.confidence);
-    const suffix=Number.isFinite(confidence)?` · ${Math.round(confidence*100)}%`:"";
-    ui.variants.title=`Ranked legal solution ${index+1}/${count}${suffix}`;
-  }
+  if(count>1&&!state.preview)ui.variants.title=`Ranked mechanically legal solution ${index+1}/${count}${confidenceText}`;
 }
 
 function selectVariant(delta){
@@ -116,7 +126,7 @@ async function referenceSolvedTiles(result,size){
     const image=byFace.get(face);if(!image)return null;
     const sw=image.naturalWidth||image.width,sh=image.naturalHeight||image.height;
     for(let row=0;row<size;row++)for(let col=0;col<size;col++){
-      const canvas=document.createElement("canvas");canvas.width=Math.max(48,Math.floor(sw/size));canvas.height=Math.max(48,Math.floor(sh/size));
+      const canvas=document.createElement("canvas\");canvas.width=Math.max(48,Math.floor(sw/size));canvas.height=Math.max(48,Math.floor(sh/size));
       canvas.getContext("2d",{alpha:false}).drawImage(image,col*sw/size,row*sh/size,sw/size,sh/size,0,0,canvas.width,canvas.height);tiles.push(canvas);
     }
   }
