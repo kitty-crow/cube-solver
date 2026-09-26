@@ -41,8 +41,15 @@ function captureSolution(result){
 function captureWorker(worker,url){
   if(!String(url||"").includes("solver-worker.js"))return;
   state.worker=worker;
+  window.__pictureCubeSolverWorker=worker;
   worker.addEventListener("message",event=>{
     const msg=event.data||{};
+    const kind=msg.result?.kind;
+    if(msg.type==="solution"&&(kind==="post-solve-tweak"||kind==="post-solve-tweak-error")){
+      event.stopImmediatePropagation?.();
+      window.dispatchEvent(new CustomEvent(kind==="post-solve-tweak"?"picture-tweak-solution":"picture-tweak-error",{detail:msg.result}));
+      return;
+    }
     if(msg.type!=="solution"||msg.result?.__solutionUiSynthetic)return;
     captureSolution(msg.result);
   });
