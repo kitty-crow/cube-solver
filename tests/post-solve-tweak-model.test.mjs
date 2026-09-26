@@ -1,10 +1,12 @@
 import assert from "node:assert/strict";
+import {analyseStickerConstraints} from "../web/sticker-constraints-v3.js";
 import {
   buildTweakConstraints,
   candidateTargets,
   compatibleTarget,
   completeTweakTarget,
   pieceForTile,
+  mod4,
 } from "../web/post-solve-tweak-model.js";
 
 assert.equal(pieceForTile(5)?.kind,"edge");
@@ -41,14 +43,17 @@ assert.equal(compensated.analysis?.ok,true);
 assert.equal(compensated.completion?.resolved,true,"the engine should choose one exact legal completion for unlocked compensation cubies");
 assert.equal(compensated.completion?.state,solvedState,"least-disturbance completion should prefer the solved arrangement when it is legal");
 
-// A new observation about the real cube outranks the previous "solved" model.
-// UR -> UF with every other cubie frozen is a parity contradiction, so the
-// model must automatically release the smallest additional old assumption
-// rather than rejecting the user's correction.
-const authoritative=completeTweakTarget({requests:new Map([[5,{target:7,rotation:0}]])});
+// Pick a non-identity edge placement that is known to be geometrically valid.
+// With every other piece frozen it creates a parity contradiction. The new
+// observation must win and the model must release the minimum old assumption.
+const unconstrained=analyseStickerConstraints({confirmations:{},ambiguities:{},centerRotations:[0,0,0,0,0,0]});
+const legalOption=unconstrained.stickers[5].domain.find(option=>Number(option.target)!==5);
+assert.ok(legalOption,"expected at least one non-identity legal edge placement");
+const uiRotation=mod4(4-Number(legalOption.rotation));
+const authoritative=completeTweakTarget({requests:new Map([[5,{target:Number(legalOption.target),rotation:uiRotation}]])});
 assert.equal(authoritative.analysis?.ok,true);
 assert.equal(authoritative.completion?.resolved,true,"an authoritative correction should be reconciled automatically");
 assert.ok((authoritative.autoUnlockedPieces?.length||0)>=1,"at least one prior cubie assumption should be released when parity requires it");
-assert.deepEqual(authoritative.completion?.confirmed?.[5],{target:7,rotation:0});
+assert.deepEqual(authoritative.completion?.confirmed?.[5],{target:Number(legalOption.target),rotation:Number(legalOption.rotation)});
 
 console.log("post-solve tweak model tests passed");
