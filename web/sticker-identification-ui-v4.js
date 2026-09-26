@@ -1,4 +1,5 @@
 import { StickerIdentificationModal as ConfidenceStickerIdentificationModal } from "./sticker-identification-ui-v3.js";
+import { renderCubemapPan } from "./sticker-cubemap-view.js";
 import { labelForFacelet } from "./sticker-constraints-v2.js";
 
 const clone=value=>value==null?value:structuredClone(value);
@@ -14,6 +15,11 @@ function installV4Styles(){
   const style=document.createElement("style");
   style.id="sticker-identification-v4-styles";
   style.textContent=`
+    .sticker-id__comparison { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:.65rem; width:100%; align-items:start; }
+    .sticker-id__comparison-item { min-width:0; margin:0; display:grid; gap:.35rem; }
+    .sticker-id__comparison-label { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:.7rem; font-weight:800; opacity:.78; text-align:center; }
+    .sticker-id__comparison .sticker-id__scan,
+    .sticker-id__reference-segment { display:block; width:100%; max-width:none; aspect-ratio:1; border-radius:.75rem; border:1px solid var(--app-border); background:#111; }
     .sticker-id__recommendation-tools { display:flex; gap:.45rem; align-items:center; justify-content:space-between; flex-wrap:wrap; min-width:0; }
     .sticker-id__recommendation-title { font-size:.72rem; font-weight:800; opacity:.82; }
     .sticker-id__recommendation-list { display:flex; gap:.4rem; overflow-x:auto; max-width:100%; min-width:0; padding:.08rem .04rem .28rem; scrollbar-width:thin; }
@@ -22,6 +28,8 @@ function installV4Styles(){
     .sticker-id__recommendation-list .pages-button[data-engine-best="true"][data-selected="false"] { font-weight:800; }
     .sticker-id__recommendation-note { margin:0; font-size:.68rem; opacity:.7; }
     @media(max-width:430px){
+      .sticker-id__comparison { gap:.45rem; }
+      .sticker-id__comparison-label { font-size:.64rem; }
       .sticker-id__recommendation-tools { align-items:stretch; }
       .sticker-id__recommendation-tools .pages-button { width:100%; }
       .sticker-id__recommendation-list .pages-button { max-width:76vw; }
@@ -35,6 +43,30 @@ export class StickerIdentificationModal extends ConfidenceStickerIdentificationM
     super(options);
     installV4Styles();
     this.recommendationLimit=6;
+
+    this.comparisonEl=document.createElement("div");
+    this.comparisonEl.className="sticker-id__comparison";
+    const photoFigure=document.createElement("figure");
+    photoFigure.className="sticker-id__comparison-item";
+    this.photoComparisonLabel=document.createElement("figcaption");
+    this.photoComparisonLabel.className="sticker-id__comparison-label";
+    this.photoComparisonLabel.textContent="Photographed sticker";
+    const referenceFigure=document.createElement("figure");
+    referenceFigure.className="sticker-id__comparison-item";
+    this.referenceComparisonCanvas=document.createElement("canvas");
+    this.referenceComparisonCanvas.className="sticker-id__reference-segment";
+    this.referenceComparisonCanvas.width=180;
+    this.referenceComparisonCanvas.height=180;
+    this.referenceComparisonLabel=document.createElement("figcaption");
+    this.referenceComparisonLabel.className="sticker-id__comparison-label";
+    this.referenceComparisonLabel.textContent="Selected reference";
+    const scanParent=this.scanCanvas?.parentElement;
+    if(scanParent&&this.scanCanvas){
+      scanParent.insertBefore(this.comparisonEl,this.scanCanvas);
+      photoFigure.append(this.scanCanvas,this.photoComparisonLabel);
+      referenceFigure.append(this.referenceComparisonCanvas,this.referenceComparisonLabel);
+      this.comparisonEl.append(photoFigure,referenceFigure);
+    }
 
     this.recommendationTools=document.createElement("div");
     this.recommendationTools.className="sticker-id__recommendation-tools";
@@ -114,6 +146,28 @@ export class StickerIdentificationModal extends ConfidenceStickerIdentificationM
     this.applySuggestion(this.engineSuggestion(),{announce:true,reset:true});
   }
 
+  renderComparison(){
+    if(!this.referenceComparisonCanvas)return;
+    const sticker=this.analysis?.stickers?.[this.currentTile]||null;
+    const target=Number(this.currentTarget());
+    this.photoComparisonLabel.textContent=sticker?`Photo · ${sticker.label}`:"Photographed sticker";
+    this.referenceComparisonLabel.textContent=Number.isInteger(target)
+      ?`Reference · ${labelForFacelet(target)} · ${Number(this.quarterTurn||0)*90}°`
+      :"Selected reference";
+    const ctx=this.referenceComparisonCanvas.getContext("2d",{alpha:false});
+    if(!this.facePixels||!this.pan){
+      ctx.fillStyle="#111";
+      ctx.fillRect(0,0,this.referenceComparisonCanvas.width,this.referenceComparisonCanvas.height);
+      return;
+    }
+    renderCubemapPan(this.referenceComparisonCanvas,this.facePixels,this.pan,this.quarterTurn);
+  }
+
+  renderViewer(){
+    super.renderViewer();
+    this.renderComparison();
+  }
+
   renderSuggestions(sticker){
     this.suggestionsEl.textContent="";
     this.suggestionsEl.classList.add("sticker-id__recommendation-list");
@@ -146,6 +200,7 @@ export class StickerIdentificationModal extends ConfidenceStickerIdentificationM
 
   render(){
     super.render();
+    this.renderComparison();
     const sticker=this.analysis?.stickers?.[this.currentTile]||null,best=this.engineSuggestion(sticker);
     this.recommendationTools.hidden=!sticker;
     this.recommendationNote.hidden=!sticker;
