@@ -29,10 +29,16 @@ assert.deepEqual(mapped.confirmations[5],{target:7,rotation:0});
 assert.equal(mapped.confirmations[10],undefined,"source cubie's companion sticker must be free");
 assert.equal(mapped.confirmations[19],undefined,"target cubie's companion sticker must be free");
 
+const solvedState="UUUUUUUUURRRRRRRRRFFFFFFFFFDDDDDDDDDLLLLLLLLLBBBBBBBBB";
 const solved=completeTweakTarget();
 assert.equal(solved.analysis?.ok,true);
 assert.equal(Number(solved.analysis?.legalStateCount),1);
 assert.equal(solved.completion?.resolved,true);
-assert.equal(solved.completion?.state,"UUUUUUUUURRRRRRRRRFFFFFFFFFDDDDDDDDDLLLLLLLLLBBBBBBBBB");
+assert.equal(solved.completion?.state,solvedState);
+
+const compensated=completeTweakTarget({unlockedPieces:new Set(["E0","E1"])});
+assert.equal(compensated.analysis?.ok,true);
+assert.equal(compensated.completion?.resolved,true,"the engine should choose one exact legal completion for unlocked compensation cubies");
+assert.equal(compensated.completion?.state,solvedState,"least-disturbance completion should prefer the solved arrangement when it is legal");
 
 console.log("post-solve tweak model tests passed");
