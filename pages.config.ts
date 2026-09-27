@@ -21,6 +21,7 @@ export default definePages({
       "panel.css",
       "button.css",
       "footer.css",
+      "kofi.css",
       "util.css",
       "responsive.css"
     ],
@@ -41,6 +42,17 @@ export default definePages({
         light: "#eef3f1",
         dark: "#101716"
       }
+    },
+    kofi: {
+      user: "kittycrow",
+      header: ".pages-header",
+      footer: ".pages-footer > span:last-child",
+      footerText: "Buy me a coffee",
+      separator: " · ",
+      desktopText: "Buy me a coffee?",
+      background: "#5bc0de",
+      text: "#323842",
+      wideAt: 721
     },
     version: { file: "version.json" }
   }
