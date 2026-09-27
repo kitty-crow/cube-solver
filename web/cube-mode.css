@@ -7,3 +7,10 @@
   .cube-size-picker { flex: 1 1 8rem; min-width: 0; }
   .cube-size-picker select { width: 100%; min-width: 0; }
 }
+
+.floating-chat-kofi-popup-iframe,
+.floating-chat-kofi-popup-iframe-mobi,
+.floating-chat-kofi-popup-iframe-closer,
+.floating-chat-kofi-popup-iframe-closer-mobi {
+  z-index: 60 !important;
+}
