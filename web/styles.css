@@ -146,3 +146,19 @@
   .cube-view { min-height: 25rem; }
   .move-buttons { grid-template-columns: 1fr; }
 }
+
+.floatingchat-container-wrap,
+.floatingchat-container-wrap-mobi {
+  top: auto !important;
+  right: auto !important;
+  bottom: 16px !important;
+  left: 16px !important;
+}
+
+.floating-chat-kofi-popup-iframe,
+.floating-chat-kofi-popup-iframe-mobi,
+.floating-chat-kofi-popup-iframe-closer,
+.floating-chat-kofi-popup-iframe-closer-mobi {
+  right: auto !important;
+  left: 16px !important;
+}
