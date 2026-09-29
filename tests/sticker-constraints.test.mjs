@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
-import { analyseStickerConstraints, EDGE_FACELETS, CORNER_FACELETS, CENTRE_FACELETS } from "../web/sticker-constraints-v3.js";
-import { compatibleReferenceTargets, prepareAuthoritativeOverride } from "../web/sticker-authoritative-override.js";
+import { analyseStickerConstraints, EDGE_FACELETS, CORNER_FACELETS, CENTRE_FACELETS } from "../.build/web/sticker-constraints-v3.js";
+import { compatibleReferenceTargets, prepareAuthoritativeOverride } from "../.build/web/sticker-authoritative-override.js";
 
 const solvedState="UUUUUUUUURRRRRRRRRFFFFFFFFFDDDDDDDDDLLLLLLLLLBBBBBBBBB";
 
