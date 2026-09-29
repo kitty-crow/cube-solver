@@ -36,6 +36,13 @@ jobs:
         run: bun install
       - name: Install vendored Pages template
         run: bun install --cwd vendor/pages
+      - name: Package migration workspace
+        run: tar --exclude=.git --exclude=vendor/pages/node_modules -czf /tmp/typescript-migration-workspace.tgz .
+      - name: Upload migration workspace
+        uses: actions/upload-artifact@v4
+        with:
+          name: typescript-migration-workspace
+          path: /tmp/typescript-migration-workspace.tgz
       - name: Collect strict TypeScript diagnostics
         id: typecheck
         shell: bash
