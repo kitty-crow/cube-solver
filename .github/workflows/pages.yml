@@ -9,6 +9,7 @@ on:
 
 permissions:
   contents: read
+  issues: write
   pages: write
   id-token: write
 
@@ -36,7 +37,40 @@ jobs:
         run: bun install
       - name: Install vendored Pages template
         run: bun install --cwd vendor/pages
-      - name: Check strict TypeScript application
+      - name: Collect strict TypeScript diagnostics
+        id: typecheck
+        shell: bash
+        run: |
+          set +e
+          bun run typecheck > /tmp/typecheck.log 2>&1
+          status=$?
+          echo "status=$status" >> "$GITHUB_OUTPUT"
+          exit 0
+      - name: Publish strict TypeScript diagnostics
+        if: github.event_name == 'pull_request' && steps.typecheck.outputs.status != '0'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        shell: bash
+        run: |
+          {
+            echo '<!-- strict-ts-diagnostics -->'
+            echo '### Strict TypeScript diagnostics'
+            echo '```text'
+            head -c 60000 /tmp/typecheck.log
+            echo
+            echo '```'
+          } > /tmp/typecheck-comment.md
+          comment_id="$(gh api "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments" --paginate --jq '.[] | select(.body | contains("<!-- strict-ts-diagnostics -->")) | .id' | head -n 1)"
+          if [ -n "$comment_id" ]; then
+            gh api --method PATCH "repos/${GITHUB_REPOSITORY}/issues/comments/${comment_id}" -f body="$(cat /tmp/typecheck-comment.md)"
+          else
+            gh pr comment "$PR_NUMBER" --body-file /tmp/typecheck-comment.md
+          fi
+      - name: Fail strict TypeScript check
+        if: steps.typecheck.outputs.status != '0'
+        run: exit 1
+      - name: Check application
         run: bun run check
       - name: Build Pages site from TypeScript
         run: bun run build
