@@ -36,9 +36,9 @@ jobs:
         run: bun install
       - name: Install vendored Pages template
         run: bun install --cwd vendor/pages
-      - name: Check application
+      - name: Check strict TypeScript application
         run: bun run check
-      - name: Build Pages site
+      - name: Build Pages site from TypeScript
         run: bun run build
       - name: Install mobile audit browser
         run: |
