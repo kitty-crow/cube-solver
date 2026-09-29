@@ -1,7 +1,7 @@
 import { definePages } from "./vendor/pages/src/index.ts";
 
 export default definePages({
-  source: "web",
+  source: ".build/web",
   out: "site",
   pages: [
     { from: "index.html", route: "/" },
