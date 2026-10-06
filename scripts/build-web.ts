@@ -3,7 +3,7 @@ import { dirname, extname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const sourceRoot = fileURLToPath(new URL("../web/", import.meta.url));
-const outputRoot = fileURLToPath(new URL("../.build/web/", import.meta.url));
+const outputRoot = fileURLToPath(new URL("../dist/", import.meta.url));
 const javascriptExtensions = new Set([".js", ".mjs", ".cjs"]);
 const transpiler = new Bun.Transpiler({ loader: "ts", target: "browser" });
 
@@ -47,4 +47,4 @@ await rm(outputRoot, { recursive: true, force: true });
 await mkdir(outputRoot, { recursive: true });
 await walk(sourceRoot);
 
-console.log("Transpiled TypeScript web source to .build/web");
+console.log("Transpiled TypeScript web source to dist");

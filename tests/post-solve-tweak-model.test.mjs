@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import {analyseStickerConstraints} from "../.build/web/sticker-constraints-v3.js";
+import {analyseStickerConstraints} from "../dist/sticker-constraints-v3.js";
 import {
   buildTweakConstraints,
   candidateTargets,
@@ -7,7 +7,7 @@ import {
   completeTweakTarget,
   pieceForTile,
   mod4,
-} from "../.build/web/post-solve-tweak-model.js";
+} from "../dist/post-solve-tweak-model.js";
 
 assert.equal(pieceForTile(5)?.kind,"edge");
 assert.deepEqual(pieceForTile(5)?.tiles,[5,10]);

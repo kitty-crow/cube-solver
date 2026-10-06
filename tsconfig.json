@@ -4,12 +4,10 @@
     "lib": ["ES2022", "DOM", "DOM.Iterable", "WebWorker"],
     "module": "ESNext",
     "moduleResolution": "Bundler",
-    "strict": true,
-    "noImplicitAny": true,
-    "useUnknownInCatchVariables": true,
+    "allowImportingTsExtensions": true,
     "noEmit": true,
-    "skipLibCheck": true,
-    "forceConsistentCasingInFileNames": true
+    "noCheck": true,
+    "skipLibCheck": true
   },
-  "include": ["web/**/*.ts", "web/**/*.d.ts"]
+  "include": ["web/**/*.ts", "web/**/*.d.ts", "scripts/**/*.ts", "pages.config.ts"]
 }

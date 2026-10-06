@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import {
   blankWarp, cloneOrientation, cubeSurfaceAddress, faceDirection, mapFacePoint,
   normaliseSphericalAngles, residualSafety,
-} from "../.build/web/cube-surface-map.js";
+} from "../dist/cube-surface-map.js";
 
 const near=(a,b,eps=1e-9)=>Math.abs(a-b)<=eps;
 function assertVecNear(a,b,eps=1e-9){
